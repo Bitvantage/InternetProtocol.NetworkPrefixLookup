@@ -42,11 +42,11 @@ Below is a visualization of a small tree that contains 10 prefixes. The orange n
 
 Prefix nodes have between zero and two children, container nodes have exactly two nodes. The child that is contained in the first half of the parent's address space is on the left side, and the child that is contained in the last half of the parent's address space is on the right side. Container nodes are automatically added and removed to maintain the correct parent-child relationship.
 
-![Small Prefix Tree](https://raw.githubusercontent.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/master/Documentation/Media/NetworkPrefixLookup-Tree-Small.svg)
+![Small Prefix Tree](https://raw.githubusercontent.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/main/Documentation/Media/NetworkPrefixLookup-Tree-Small.svg)
 
 As more prefixes are added to the tree, the tree tends to grow in width far more quickly than depth. Since the depth of the tree is directly proportional to the search performance, it is possible to rapidly search a tree with millions of prefixes while only examining a relatively small number of the nodes.
 
-![Wide Prefix Tree](https://raw.githubusercontent.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/master/Documentation/Media/NetworkPrefixLookup-Tree-Wide.png)
+![Wide Prefix Tree](https://raw.githubusercontent.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/main/Documentation/Media/NetworkPrefixLookup-Tree-Wide.png)
 
 ### Tree Visualization 
 A Graphviz DOT diagram can generated, and optionally rendered. In order to render the DOT diagram into a SVG you must have [Graphviz](https://graphviz.org/) installed.
