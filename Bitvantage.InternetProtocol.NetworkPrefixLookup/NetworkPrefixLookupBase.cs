@@ -182,7 +182,7 @@ public abstract class NetworkPrefixLookupBase<TValue> where TValue : NetworkPref
             if (isRoot)
                 stringBuilder.AppendLine("\t\troot=true");
 
-            stringBuilder.AppendLine($"\t\trank={currentNode.Node.ValuePair.Prefix.Prefix + 1}");
+            stringBuilder.AppendLine($"\t\trank={currentNode.Node.ValuePair.Prefix.Length + 1}");
             stringBuilder.AppendLine("\t\tlabel=<");
             stringBuilder.AppendLine($"\t\t\t<table border=\"0\" cellborder=\"0\" cellspacing=\"0\" cellpadding=\"0\"{(isRoot ? " bgcolor=\"orange\"" : "")}>");
 
@@ -190,7 +190,7 @@ public abstract class NetworkPrefixLookupBase<TValue> where TValue : NetworkPref
             if (displayText != null && currentNode.Node.HasValue)
                 nodeText = $" {displayText.Invoke((TValue)currentNode.Node.ValuePair)}";
 
-            stringBuilder.AppendLine($"\t\t\t\t<tr><td align=\"left\"{(isRoot ? " border=\"1\"" : "")}><b>{currentNode.Node.ValuePair.Prefix.Address}/{currentNode.Node.ValuePair.Prefix.Prefix}{nodeText}</b></td></tr>");
+            stringBuilder.AppendLine($"\t\t\t\t<tr><td align=\"left\"{(isRoot ? " border=\"1\"" : "")}><b>{currentNode.Node.ValuePair.Prefix.Address}/{currentNode.Node.ValuePair.Prefix.Length}{nodeText}</b></td></tr>");
 
             stringBuilder.AppendLine($"\t\t\t\t\t<tr><td><table cellborder=\"0\" cellspacing=\"0\" cellpadding=\"0\" bgcolor=\"{(currentNode.Node.HasValue ? "lightblue" : "yellowgreen")}\" >");
 
@@ -373,7 +373,7 @@ public abstract class NetworkPrefixLookupBase<TValue> where TValue : NetworkPref
         var existingNode = parent.Children[targetSlot];
 
         // if the new node has a smaller prefix then the existing node, the new node can be inserted directly above the existing node
-        if (newNode.ValuePair.Prefix.Prefix < existingNode.ValuePair.Prefix.Prefix && newNode.ValuePair.Prefix.Contains(existingNode.ValuePair.Prefix))
+        if (newNode.ValuePair.Prefix.Length < existingNode.ValuePair.Prefix.Length && newNode.ValuePair.Prefix.Contains(existingNode.ValuePair.Prefix))
         {
             newNode.Children[newNode.GetSlot(existingNode.ValuePair.Prefix)] = existingNode;
             parent.Children[targetSlot] = newNode;
@@ -440,7 +440,7 @@ public abstract class NetworkPrefixLookupBase<TValue> where TValue : NetworkPref
                 lastValueNode = currentNode;
 
             currentNode = currentNode.Children[currentNode.GetSlot(addressBits)];
-        } while (currentNode != null && currentNode.NetworkBits == (addressBits & currentNode.NetworkMaskBits) && currentNode.Prefix <= address.Prefix);
+        } while (currentNode != null && currentNode.NetworkBits == (addressBits & currentNode.NetworkMaskBits) && currentNode.Prefix <= address.Length);
 
         if (lastValueNode != null)
         {
@@ -488,7 +488,7 @@ public abstract class NetworkPrefixLookupBase<TValue> where TValue : NetworkPref
 
             var childSlot = currentNode.GetSlot(addressBits);
             currentNode = currentNode.Children[childSlot];
-        } while (currentNode != null && currentNode.ValuePair.Prefix.NetworkBits == (addressBits & currentNode.ValuePair.Prefix.NetworkMaskBits) && currentNode.ValuePair.Prefix.Prefix <= address.Prefix);
+        } while (currentNode != null && currentNode.ValuePair.Prefix.NetworkBits == (addressBits & currentNode.ValuePair.Prefix.NetworkMaskBits) && currentNode.ValuePair.Prefix.Length <= address.Length);
 
         return result.Count > 0;
     }
@@ -566,7 +566,7 @@ public abstract class NetworkPrefixLookupBase<TValue> where TValue : NetworkPref
             var nextNodeSlot = lastNode.Node.GetSlot(networkBits);
             var nextNode = lastNode.Node.Children[nextNodeSlot];
 
-            if (nextNode == null || nextNode.Prefix > network.Prefix || (networkBits & nextNode.NetworkMaskBits) != nextNode.NetworkBits)
+            if (nextNode == null || nextNode.Prefix > network.Length || (networkBits & nextNode.NetworkMaskBits) != nextNode.NetworkBits)
                 break;
 
             lastNode = new NodeHistory(nextNode, nextNodeSlot);
@@ -630,7 +630,7 @@ public abstract class NetworkPrefixLookupBase<TValue> where TValue : NetworkPref
                 // copy these fields to improve performance
                 NetworkBits = _valuePair.Prefix.NetworkBits;
                 NetworkMaskBits = _valuePair.Prefix.NetworkMaskBits;
-                Prefix = (ushort)_valuePair.Prefix.Prefix;
+                Prefix = (ushort)_valuePair.Prefix.Length;
                 AddressLength = _valuePair.Prefix.AddressLength;
 
                 SplitMask = UInt128.One << AddressLength - Prefix - 1;
