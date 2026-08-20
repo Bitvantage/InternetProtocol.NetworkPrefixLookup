@@ -1073,7 +1073,7 @@ internal class NetworkPrefixLookupTest
     {
         var ipNetworkLookup = new NetworkPrefixLookup<string>();
 
-        var randomNetworks = GetRandomIPv4Networks(0).Distinct().Where(item => item.ContainsBy("10.0.0.0/8")).Take(3000).ToList();
+        var randomNetworks = GetRandomIPv4Networks(0).Distinct().Where(item => item.ContainedBy("10.0.0.0/8")).Take(3000).ToList();
         foreach (var randomNetwork in randomNetworks)
             ipNetworkLookup.TryAdd(randomNetwork, string.Empty);
 
