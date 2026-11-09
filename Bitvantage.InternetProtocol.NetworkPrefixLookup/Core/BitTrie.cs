@@ -128,17 +128,17 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
 
     // What readers see: the root and the shortcut blocks. A batch or Clear replaces both with one reference write, so a
     // reader never combines a new root with old blocks. A single change outside a batch updates them in place.
-    private sealed class Published(Node root, bool table)
+    private sealed class Published(Node root, bool hasTable)
     {
         public Node Root = root;
-        public readonly Block?[]? Blocks = table ? new Block?[256] : null;
+        public readonly Block?[]? Blocks = hasTable ? new Block?[256] : null;
     }
 
     private readonly Lock _lock = new();
     private readonly bool _hasTable;
 
     private Published _published;
-    private Node _w;        // what the writer works on; ahead of the published root only during a batch
+    private Node _writerRoot; // what the writer works on; ahead of the published root only during a batch
     private long _stamp = 1; // nodes stamped 0 at construction count as published
     private bool _batch;
     private bool _batchFailed; // a write in the batch threw, so its private nodes may be half changed
@@ -156,8 +156,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         if (TKey.Width % 8 != 0 || TKey.Width < 8 || TKey.Width > 128)
             throw new NotSupportedException($"Key widths must be a multiple of 8 from 8 to 128 bits; {typeof(TKey).Name} has {TKey.Width}.");
         _hasTable = TKey.Width >= 16;
-        _w = new Node();
-        _published = new Published(_w, _hasTable);
+        _writerRoot = new Node();
+        _published = new Published(_writerRoot, _hasTable);
     }
 
     /// <summary>Creates a trie holding the given prefixes, built in one pass.</summary>
@@ -230,7 +230,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         {
             var before = Volatile.Read(ref _changes);
             var found = ContainsOnce(in key);
-            if (Settled(before)) return found;
+            if (Settled(before))
+                return found;
         }
     }
 
@@ -243,7 +244,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     private bool ContainsOnce(in TKey key)
     {
         var published = Volatile.Read(ref _published);
-        var n = Volatile.Read(ref published.Root);
+        var node = Volatile.Read(ref published.Root);
         var depth = 0;
 
         var blocks = published.Blocks;
@@ -253,15 +254,17 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             var block = blocks[first];
             if (block != null)
             {
-                if (Covers(n, first)) return true;
-                n = block.Depth1;
+                if (Covers(node, first))
+                    return true;
+                node = block.Depth1;
                 depth = 1;
                 var second = TKey.GetBits(key, 8, 8);
                 var depth2 = block.Depth2[second];
                 if (depth2 != null)
                 {
-                    if (Covers(n, second)) return true;
-                    n = depth2;
+                    if (Covers(node, second))
+                        return true;
+                    node = depth2;
                     depth = 2;
                 }
             }
@@ -270,24 +273,26 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         while (true)
         {
             var octet = TKey.GetBits(key, depth << 3, 8);
-            if (Covers(n, octet)) return true;
-            if (n.Kids.Test(octet))
+            if (Covers(node, octet))
+                return true;
+            if (node.Kids.Test(octet))
             {
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 depth++;
                 continue;
             }
 
-            if (!n.Leaves.Test(octet)) return false;
-            ref var leaf = ref n.LeafEntries[n.Leaves.Rank(octet) - 1];
+            if (!node.Leaves.Test(octet))
+                return false;
+            ref var leaf = ref node.LeafEntries[node.Leaves.Rank(octet) - 1];
             return TKey.MatchesUnderMask(key, leaf.Bits, leaf.Mask);
         }
     }
 
     // whether a fringe or prefix of the node contains the key's octet, and so the key, given that the path to the node does
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool Covers(Node n, int octet) =>
-        n.Fringes.Test(octet) || n.Prefixes.Intersects(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)]);
+    private static bool Covers(Node node, int octet) =>
+        node.Fringes.Test(octet) || node.Prefixes.Intersects(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)]);
 
     // True when at most one change overlapped a lookup that began when _changes was before, so that the lookup saw the
     // trie as it was before or after that change.
@@ -305,7 +310,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         {
             var before = Volatile.Read(ref _changes);
             ref var entry = ref FindOnce(in key);
-            if (Settled(before)) return ref entry;
+            if (Settled(before))
+                return ref entry;
         }
     }
 
@@ -327,8 +333,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     private ref Entry FindOnce(in TKey key)
     {
         var published = Volatile.Read(ref _published);
-        var n = Volatile.Read(ref published.Root);
-        Node? parent = null; // the node one level above n, for a backtrack of one level
+        var node = Volatile.Read(ref published.Root);
+        Node? parent = null; // the node one level above node, for a backtrack of one level
         var depth = 0;
 
         var blocks = published.Blocks;
@@ -337,14 +343,14 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             var block = blocks[TKey.GetTopBits(key, 8)];
             if (block != null)
             {
-                parent = n;
-                n = block.Depth1;
+                parent = node;
+                node = block.Depth1;
                 depth = 1;
                 var depth2 = block.Depth2[TKey.GetBits(key, 8, 8)];
                 if (depth2 != null)
                 {
-                    parent = n;
-                    n = depth2;
+                    parent = node;
+                    node = depth2;
                     depth = 2;
                 }
             }
@@ -355,25 +361,25 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         while (true)
         {
             var octet = TKey.GetBits(key, depth << 3, 8);
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                parent = n;
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                parent = node;
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 depth++;
                 continue;
             }
 
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                ref var leaf = ref n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                ref var leaf = ref node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 if (TKey.MatchesUnderMask(key, leaf.Bits, leaf.Mask))
                     return ref leaf.Entry;
             }
 
-            if (n.Fringes.Test(octet))
-                return ref n.FringeEntries[n.Fringes.Rank(octet) - 1];
-            if (n.Prefixes.AndTop(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)], out var top))
-                return ref n.PrefixEntries[n.Prefixes.Rank(top) - 1];
+            if (node.Fringes.Test(octet))
+                return ref node.FringeEntries[node.Fringes.Rank(octet) - 1];
+            if (node.Prefixes.AndTop(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)], out var top))
+                return ref node.PrefixEntries[node.Prefixes.Rank(top) - 1];
             break;
         }
 
@@ -383,13 +389,13 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         // one level up, from the local: the deepest node held nothing for the key, so its parent's fringe or prefix at
         // the key's octet is the next longest candidate
         {
-            n = parent!;
+            node = parent!;
             depth--;
             var octet = TKey.GetBits(key, depth << 3, 8);
-            if (n.Fringes.Test(octet))
-                return ref n.FringeEntries[n.Fringes.Rank(octet) - 1];
-            if (n.Prefixes.AndTop(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)], out var top))
-                return ref n.PrefixEntries[n.Prefixes.Rank(top) - 1];
+            if (node.Fringes.Test(octet))
+                return ref node.FringeEntries[node.Fringes.Rank(octet) - 1];
+            if (node.Prefixes.AndTop(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)], out var top))
+                return ref node.PrefixEntries[node.Prefixes.Rank(top) - 1];
         }
 
         // PERF: further up, a second walk from the root, which keeps the whole path. Rare: 0.8% of lookups on the random
@@ -404,7 +410,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     {
         var stack = new NodeStack();
         var published = Volatile.Read(ref _published);
-        var n = Volatile.Read(ref published.Root);
+        var node = Volatile.Read(ref published.Root);
         var depth = 0;
 
         var blocks = published.Blocks;
@@ -413,14 +419,14 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             var block = blocks[TKey.GetTopBits(key, 8)];
             if (block != null)
             {
-                stack[0] = n;
-                n = block.Depth1;
+                stack[0] = node;
+                node = block.Depth1;
                 depth = 1;
                 var depth2 = block.Depth2[TKey.GetBits(key, 8, 8)];
                 if (depth2 != null)
                 {
-                    stack[1] = n;
-                    n = depth2;
+                    stack[1] = node;
+                    node = depth2;
                     depth = 2;
                 }
             }
@@ -429,18 +435,18 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         // descend as far as the key leads; a leaf below the last node ends the search
         while (true)
         {
-            stack[depth] = n;
+            stack[depth] = node;
             var octet = TKey.GetBits(key, depth << 3, 8);
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 depth++;
                 continue;
             }
 
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                ref var leaf = ref n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                ref var leaf = ref node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 if (TKey.MatchesUnderMask(key, leaf.Bits, leaf.Mask))
                     return ref leaf.Entry;
             }
@@ -453,13 +459,13 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         while (true)
         {
             var octet = TKey.GetBits(key, depth << 3, 8);
-            if (n.Fringes.Test(octet))
-                return ref n.FringeEntries[n.Fringes.Rank(octet) - 1];
-            if (n.Prefixes.AndTop(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)], out var top))
-                return ref n.PrefixEntries[n.Prefixes.Rank(top) - 1];
+            if (node.Fringes.Test(octet))
+                return ref node.FringeEntries[node.Fringes.Rank(octet) - 1];
+            if (node.Prefixes.AndTop(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)], out var top))
+                return ref node.PrefixEntries[node.Prefixes.Rank(top) - 1];
             if (depth == 0)
                 return ref Unsafe.NullRef<Entry>();
-            n = stack[--depth];
+            node = stack[--depth];
         }
     }
 
@@ -486,7 +492,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         {
             var before = Volatile.Read(ref _changes);
             ref var entry = ref FindForPrefixOnce(in bits, length);
-            if (Settled(before)) return ref entry;
+            if (Settled(before))
+                return ref entry;
         }
     }
 
@@ -497,8 +504,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     private ref Entry FindForPrefixOnce(in TKey bits, int length)
     {
         var published = Volatile.Read(ref _published);
-        var n = Volatile.Read(ref published.Root);
-        Node? parent = null; // the node one level above n
+        var node = Volatile.Read(ref published.Root);
+        Node? parent = null; // the node one level above node
         var depth = 0;
 
         // the nodes at depths 1 and 2 matter only to a prefix longer than 8 and 16 bits
@@ -508,14 +515,14 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             var block = blocks[TKey.GetTopBits(bits, 8)];
             if (block != null)
             {
-                parent = n;
-                n = block.Depth1;
+                parent = node;
+                node = block.Depth1;
                 depth = 1;
                 var depth2 = length > 16 ? block.Depth2[TKey.GetBits(bits, 8, 8)] : null;
                 if (depth2 != null)
                 {
-                    parent = n;
-                    n = depth2;
+                    parent = node;
+                    node = depth2;
                     depth = 2;
                 }
             }
@@ -525,17 +532,17 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         while (length - (depth << 3) > 8)
         {
             var octet = TKey.GetBits(bits, depth << 3, 8);
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                parent = n;
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                parent = node;
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 depth++;
                 continue;
             }
 
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                ref var leaf = ref n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                ref var leaf = ref node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 if (leaf.Length <= length && TKey.MatchesUnderMask(bits, leaf.Bits, leaf.Mask))
                     return ref leaf.Entry;
             }
@@ -548,11 +555,11 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         {
             var octet = TKey.GetBits(bits, depth << 3, 8);
             var relative = length - (depth << 3);
-            if (relative >= 8 && n.Fringes.Test(octet))
-                return ref n.FringeEntries[n.Fringes.Rank(octet) - 1];
+            if (relative >= 8 && node.Fringes.Test(octet))
+                return ref node.FringeEntries[node.Fringes.Rank(octet) - 1];
             var index = relative >= 8 ? ArtTables.OctetToIndex(octet) : ArtTables.PrefixToIndex(octet, relative);
-            if (n.Prefixes.AndTop(in ArtTables.Ancestors[index], out var top))
-                return ref n.PrefixEntries[n.Prefixes.Rank(top) - 1];
+            if (node.Prefixes.AndTop(in ArtTables.Ancestors[index], out var top))
+                return ref node.PrefixEntries[node.Prefixes.Rank(top) - 1];
         }
 
         if (depth == 0)
@@ -560,13 +567,13 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
 
         // one level up, from the local; the prefix reaches past this node's stride
         {
-            n = parent!;
+            node = parent!;
             depth--;
             var octet = TKey.GetBits(bits, depth << 3, 8);
-            if (n.Fringes.Test(octet))
-                return ref n.FringeEntries[n.Fringes.Rank(octet) - 1];
-            if (n.Prefixes.AndTop(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)], out var top))
-                return ref n.PrefixEntries[n.Prefixes.Rank(top) - 1];
+            if (node.Fringes.Test(octet))
+                return ref node.FringeEntries[node.Fringes.Rank(octet) - 1];
+            if (node.Prefixes.AndTop(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)], out var top))
+                return ref node.PrefixEntries[node.Prefixes.Rank(top) - 1];
         }
 
         // PERF: further up, a second walk from the root with the whole path, as FindOnce does. The retry in FindForPrefix
@@ -579,25 +586,25 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     private ref Entry FindForPrefixWithStack(in TKey bits, int length)
     {
         var path = new NodeStack();
-        var n = Root;
+        var node = Root;
         var depth = 0;
         while (true)
         {
-            path[depth] = n;
+            path[depth] = node;
             if (length - (depth << 3) <= 8)
                 break;
 
             var octet = TKey.GetBits(bits, depth << 3, 8);
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 depth++;
                 continue;
             }
 
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                ref var leaf = ref n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                ref var leaf = ref node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 if (leaf.Length <= length && TKey.MatchesUnderMask(bits, leaf.Bits, leaf.Mask))
                     return ref leaf.Entry;
             }
@@ -607,14 +614,14 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
 
         for (; depth >= 0; depth--)
         {
-            n = path[depth];
+            node = path[depth];
             var octet = TKey.GetBits(bits, depth << 3, 8);
             var relative = length - (depth << 3);
-            if (relative >= 8 && n.Fringes.Test(octet))
-                return ref n.FringeEntries[n.Fringes.Rank(octet) - 1];
+            if (relative >= 8 && node.Fringes.Test(octet))
+                return ref node.FringeEntries[node.Fringes.Rank(octet) - 1];
             var index = relative >= 8 ? ArtTables.OctetToIndex(octet) : ArtTables.PrefixToIndex(octet, relative);
-            if (n.Prefixes.AndTop(in ArtTables.Ancestors[index], out var top))
-                return ref n.PrefixEntries[n.Prefixes.Rank(top) - 1];
+            if (node.Prefixes.AndTop(in ArtTables.Ancestors[index], out var top))
+                return ref node.PrefixEntries[node.Prefixes.Rank(top) - 1];
         }
 
         return ref Unsafe.NullRef<Entry>();
@@ -665,11 +672,12 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         {
             var before = Volatile.Read(ref _changes);
             ref var entry = ref FindExact(Root, in bits, length);
-            if (Settled(before)) return ref entry;
+            if (Settled(before))
+                return ref entry;
         }
     }
 
-    private static ref Entry FindExact(Node n, in TKey bits, int length)
+    private static ref Entry FindExact(Node node, in TKey bits, int length)
     {
         for (var depth = 0; ; depth++)
         {
@@ -678,21 +686,21 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             if (relative < 8)
             {
                 var index = ArtTables.PrefixToIndex(octet, relative);
-                return ref n.Prefixes.Test(index) ? ref n.PrefixEntries[n.Prefixes.Rank(index) - 1] : ref Unsafe.NullRef<Entry>();
+                return ref node.Prefixes.Test(index) ? ref node.PrefixEntries[node.Prefixes.Rank(index) - 1] : ref Unsafe.NullRef<Entry>();
             }
 
             if (relative == 8)
-                return ref n.Fringes.Test(octet) ? ref n.FringeEntries[n.Fringes.Rank(octet) - 1] : ref Unsafe.NullRef<Entry>();
+                return ref node.Fringes.Test(octet) ? ref node.FringeEntries[node.Fringes.Rank(octet) - 1] : ref Unsafe.NullRef<Entry>();
 
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 continue;
             }
 
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                ref var leaf = ref n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                ref var leaf = ref node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 if (leaf.Length == length && TKey.MatchesUnderMask(bits, leaf.Bits, leaf.Mask))
                     return ref leaf.Entry;
             }
@@ -757,7 +765,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         {
             var before = Volatile.Read(ref _changes);
             var count = CollectMatchesOnce(in bits, length, destination);
-            if (Settled(before)) return count;
+            if (Settled(before))
+                return count;
         }
     }
 
@@ -776,7 +785,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             count++;
         }
 
-        var n = Root;
+        var node = Root;
         for (var depth = 0; ; depth++)
         {
             var octet = TKey.GetBits(bits, depth << 3, 8);
@@ -784,23 +793,23 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
 
             // the prefixes on the path are the ancestors of the prefix's base index; a lower index is a shorter prefix
             var index = relative >= 8 ? ArtTables.OctetToIndex(octet) : ArtTables.PrefixToIndex(octet, relative);
-            var hits = BitSet256.And(n.Prefixes, ArtTables.Ancestors[index]);
-            for (var i = hits.First(); i < 256; i = hits.NextSet(i + 1))
-                Emit(in n.PrefixEntries[n.Prefixes.Rank(i) - 1], destination, ref count);
-            if (relative >= 8 && n.Fringes.Test(octet))
-                Emit(in n.FringeEntries[n.Fringes.Rank(octet) - 1], destination, ref count);
+            var hits = BitSet256.And(node.Prefixes, ArtTables.Ancestors[index]);
+            for (var prefixIndex = hits.First(); prefixIndex < 256; prefixIndex = hits.NextSet(prefixIndex + 1))
+                Emit(in node.PrefixEntries[node.Prefixes.Rank(prefixIndex) - 1], destination, ref count);
+            if (relative >= 8 && node.Fringes.Test(octet))
+                Emit(in node.FringeEntries[node.Fringes.Rank(octet) - 1], destination, ref count);
             if (relative <= 8)
                 break; // the prefix ends in this node's stride; for a full-width key, this is the last level
 
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 continue;
             }
 
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                ref var leaf = ref n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                ref var leaf = ref node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 if (leaf.Length <= length && TKey.MatchesUnderMask(bits, leaf.Bits, leaf.Mask))
                     Emit(in leaf.Entry, destination, ref count);
             }
@@ -821,7 +830,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         {
             var before = Volatile.Read(ref _changes);
             var overlaps = OverlapsOnce(in bits, length);
-            if (Settled(before)) return overlaps;
+            if (Settled(before))
+                return overlaps;
         }
     }
 
@@ -830,7 +840,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     // the stride contains it or lies inside it, and so does anything stored at the octets it covers.
     private bool OverlapsOnce(in TKey bits, int length)
     {
-        var n = Root;
+        var node = Root;
         for (var depth = 0; ; depth++)
         {
             var octet = TKey.GetBits(bits, depth << 3, 8);
@@ -839,26 +849,26 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             {
                 var index = ArtTables.PrefixToIndex(octet, relative);
                 ref var octets = ref ArtTables.Octets[index];
-                return n.Prefixes.Intersects(in ArtTables.Ancestors[index]) || n.Prefixes.Intersects(in ArtTables.Descendants[index])
-                    || n.Fringes.Intersects(in octets) || n.Leaves.Intersects(in octets) || n.Kids.Intersects(in octets);
+                return node.Prefixes.Intersects(in ArtTables.Ancestors[index]) || node.Prefixes.Intersects(in ArtTables.Descendants[index])
+                    || node.Fringes.Intersects(in octets) || node.Leaves.Intersects(in octets) || node.Kids.Intersects(in octets);
             }
 
-            if (n.Prefixes.Intersects(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)]) || n.Fringes.Test(octet))
+            if (node.Prefixes.Intersects(in ArtTables.Ancestors[ArtTables.OctetToIndex(octet)]) || node.Fringes.Test(octet))
                 return true;
             if (relative == 8)
-                return n.Kids.Test(octet) || n.Leaves.Test(octet); // what lies below the octet lies inside the prefix
+                return node.Kids.Test(octet) || node.Leaves.Test(octet); // what lies below the octet lies inside the prefix
 
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 continue;
             }
 
-            if (!n.Leaves.Test(octet))
+            if (!node.Leaves.Test(octet))
                 return false;
 
             // the leaf and the prefix overlap when they agree on the shorter one's bits
-            ref var leaf = ref n.LeafEntries[n.Leaves.Rank(octet) - 1];
+            ref var leaf = ref node.LeafEntries[node.Leaves.Rank(octet) - 1];
             var shorter = Math.Min(leaf.Length, length);
             return TKey.MatchesUnderMask(bits, TKey.Truncate(leaf.Bits, shorter), TKey.MaskFor(shorter));
         }
@@ -881,7 +891,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     // second iterator allocated 357 to 446 bytes per call on the real tables.
     private IEnumerable<PrefixEntry<TPrefix, TValue>> Subnets(TKey bits, int length)
     {
-        var n = Root;
+        var node = Root;
         var depth = 0;
         int index, octet;
         while (true)
@@ -895,16 +905,16 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
                 break;
             }
 
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 depth++;
                 continue;
             }
 
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                var leaf = n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                var leaf = node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 if (leaf.Length >= length && TKey.MatchesUnderMask(leaf.Bits, bits, TKey.MaskFor(length)))
                     yield return new PrefixEntry<TPrefix, TValue>(leaf.Entry.Prefix, leaf.Entry.Value);
             }
@@ -924,21 +934,21 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             BitSet256 prefixes, occupied;
             if (isTop && index != 0)
             {
-                prefixes = BitSet256.And(n.Prefixes, ArtTables.Descendants[index]);
-                occupied = BitSet256.And(BitSet256.Or(n.Fringes, BitSet256.Or(n.Leaves, n.Kids)), ArtTables.Octets[index]);
+                prefixes = BitSet256.And(node.Prefixes, ArtTables.Descendants[index]);
+                occupied = BitSet256.And(BitSet256.Or(node.Fringes, BitSet256.Or(node.Leaves, node.Kids)), ArtTables.Octets[index]);
                 occupied = BitSet256.Or(occupied, ArtTables.StartOctets(in prefixes));
             }
             else if (isTop)
             {
                 prefixes = default;
                 occupied = default;
-                if (n.Fringes.Test(topOctet) || n.Leaves.Test(topOctet) || n.Kids.Test(topOctet))
+                if (node.Fringes.Test(topOctet) || node.Leaves.Test(topOctet) || node.Kids.Test(topOctet))
                     occupied.Set(topOctet);
             }
             else
             {
-                prefixes = n.Prefixes;
-                occupied = BitSet256.Or(ArtTables.StartOctets(in prefixes), BitSet256.Or(n.Fringes, BitSet256.Or(n.Leaves, n.Kids)));
+                prefixes = node.Prefixes;
+                occupied = BitSet256.Or(ArtTables.StartOctets(in prefixes), BitSet256.Or(node.Fringes, BitSet256.Or(node.Leaves, node.Kids)));
             }
 
             var descended = false;
@@ -947,30 +957,32 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
                 // prefixes inside the stride that start at this octet, shortest first
                 for (var relative = 0; relative < 8; relative++)
                 {
-                    if ((octet & ((1 << (8 - relative)) - 1)) != 0) continue;
-                    var i = ArtTables.PrefixToIndex(octet, relative);
-                    if (!prefixes.Test(i)) continue;
-                    var entry = n.PrefixEntries[n.Prefixes.Rank(i) - 1];
+                    if ((octet & ((1 << (8 - relative)) - 1)) != 0)
+                        continue;
+                    var prefixIndex = ArtTables.PrefixToIndex(octet, relative);
+                    if (!prefixes.Test(prefixIndex))
+                        continue;
+                    var entry = node.PrefixEntries[node.Prefixes.Rank(prefixIndex) - 1];
                     yield return new PrefixEntry<TPrefix, TValue>(entry.Prefix, entry.Value);
                 }
 
-                if (n.Fringes.Test(octet))
+                if (node.Fringes.Test(octet))
                 {
-                    var entry = n.FringeEntries[n.Fringes.Rank(octet) - 1];
+                    var entry = node.FringeEntries[node.Fringes.Rank(octet) - 1];
                     yield return new PrefixEntry<TPrefix, TValue>(entry.Prefix, entry.Value);
                 }
 
-                if (n.Leaves.Test(octet))
+                if (node.Leaves.Test(octet))
                 {
-                    var entry = n.LeafEntries[n.Leaves.Rank(octet) - 1].Entry;
+                    var entry = node.LeafEntries[node.Leaves.Rank(octet) - 1].Entry;
                     yield return new PrefixEntry<TPrefix, TValue>(entry.Prefix, entry.Value);
                 }
 
-                if (n.Kids.Test(octet))
+                if (node.Kids.Test(octet))
                 {
                     // resume this node after the child's subtree
-                    (stack ??= new Stack<(Node, int)>()).Push((n, octet + 1));
-                    n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                    (stack ??= new Stack<(Node, int)>()).Push((node, octet + 1));
+                    node = node.KidNodes[node.Kids.Rank(octet) - 1];
                     next = 0;
                     isTop = false;
                     descended = true;
@@ -982,7 +994,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
                 continue;
             if (stack == null || !stack.TryPop(out var frame))
                 yield break;
-            (n, next) = frame;
+            (node, next) = frame;
             isTop = stack.Count == 0; // the first node is the bottom frame
         }
     }
@@ -1009,35 +1021,37 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         stack.Push((root, 0, default, 0));
         while (stack.TryPop(out var frame))
         {
-            var (n, depth, start, octet) = frame;
+            var (node, depth, start, octet) = frame;
             var offset = depth << 3;
-            var occupied = BitSet256.Or(ArtTables.StartOctets(in n.Prefixes), BitSet256.Or(n.Fringes, BitSet256.Or(n.Leaves, n.Kids)));
+            var occupied = BitSet256.Or(ArtTables.StartOctets(in node.Prefixes), BitSet256.Or(node.Fringes, BitSet256.Or(node.Leaves, node.Kids)));
             for (octet = occupied.NextSet(octet); octet < 256; octet = occupied.NextSet(octet + 1))
             {
                 // prefixes inside the stride that start at this octet, shortest first
                 for (var relative = 0; relative < 8; relative++)
                 {
-                    if ((octet & ((1 << (8 - relative)) - 1)) != 0) continue;
+                    if ((octet & ((1 << (8 - relative)) - 1)) != 0)
+                        continue;
                     var index = ArtTables.PrefixToIndex(octet, relative);
-                    if (!n.Prefixes.Test(index)) continue;
+                    if (!node.Prefixes.Test(index))
+                        continue;
                     var bits = relative == 0 ? start : TKey.SetBits(start, offset, relative, octet >> (8 - relative));
-                    yield return (bits, offset + relative, n.PrefixEntries[n.Prefixes.Rank(index) - 1]);
+                    yield return (bits, offset + relative, node.PrefixEntries[node.Prefixes.Rank(index) - 1]);
                 }
 
-                if (n.Fringes.Test(octet))
-                    yield return (TKey.SetBits(start, offset, 8, octet), offset + 8, n.FringeEntries[n.Fringes.Rank(octet) - 1]);
+                if (node.Fringes.Test(octet))
+                    yield return (TKey.SetBits(start, offset, 8, octet), offset + 8, node.FringeEntries[node.Fringes.Rank(octet) - 1]);
 
-                if (n.Leaves.Test(octet))
+                if (node.Leaves.Test(octet))
                 {
-                    var leaf = n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                    var leaf = node.LeafEntries[node.Leaves.Rank(octet) - 1];
                     yield return (leaf.Bits, leaf.Length, leaf.Entry);
                 }
 
-                if (n.Kids.Test(octet))
+                if (node.Kids.Test(octet))
                 {
                     // resume this node after the child's subtree
-                    stack.Push((n, depth, start, octet + 1));
-                    stack.Push((n.KidNodes[n.Kids.Rank(octet) - 1], depth + 1, TKey.SetBits(start, offset, 8, octet), 0));
+                    stack.Push((node, depth, start, octet + 1));
+                    stack.Push((node.KidNodes[node.Kids.Rank(octet) - 1], depth + 1, TKey.SetBits(start, offset, 8, octet), 0));
                     break;
                 }
             }
@@ -1097,7 +1111,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         ArgumentNullException.ThrowIfNull(valueFactory);
         using (_lock.EnterScope())
         {
-            ref var entry = ref FindExact(_w, in bits, length);
+            ref var entry = ref FindExact(_writerRoot, in bits, length);
             if (!Unsafe.IsNullRef(ref entry))
                 return entry.Value;
 
@@ -1126,7 +1140,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         CheckLength(length);
         using (_lock.EnterScope())
         {
-            ref var entry = ref FindExact(_w, in bits, length);
+            ref var entry = ref FindExact(_writerRoot, in bits, length);
             if (Unsafe.IsNullRef(ref entry))
             {
                 value = default!;
@@ -1152,7 +1166,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         CheckLength(length);
         using (_lock.EnterScope())
         {
-            ref var entry = ref FindExact(_w, in bits, length);
+            ref var entry = ref FindExact(_writerRoot, in bits, length);
             return !Unsafe.IsNullRef(ref entry) && EqualityComparer<TValue>.Default.Equals(entry.Value, expectedValue) && DeleteOrFailBatch(in bits, length);
         }
     }
@@ -1173,7 +1187,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         CheckLength(length);
         using (_lock.EnterScope())
         {
-            ref var entry = ref FindExact(_w, in bits, length);
+            ref var entry = ref FindExact(_writerRoot, in bits, length);
             if (Unsafe.IsNullRef(ref entry) || !EqualityComparer<TValue>.Default.Equals(entry.Value, expectedValue))
                 return false;
 
@@ -1190,7 +1204,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         }
         catch
         {
-            if (_batch) _batchFailed = true;
+            if (_batch)
+                _batchFailed = true;
             throw;
         }
     }
@@ -1205,7 +1220,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         }
         catch
         {
-            if (_batch) _batchFailed = true;
+            if (_batch)
+                _batchFailed = true;
             throw;
         }
     }
@@ -1216,9 +1232,10 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         using (_lock.EnterScope())
         {
             _stamp++;
-            _w = new Node { Stamp = _stamp };
-            if (_batch) return;
-            var published = new Published(_w, _hasTable);
+            _writerRoot = new Node { Stamp = _stamp };
+            if (_batch)
+                return;
+            var published = new Published(_writerRoot, _hasTable);
             Interlocked.Increment(ref _changes);
             Volatile.Write(ref _published, published);
             Interlocked.Increment(ref _changes);
@@ -1270,18 +1287,18 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
                 throw new InvalidOperationException("A write in the batch threw, so the batch was discarded.");
             if (commit)
             {
-                Trim(_w, _stamp);
-                var snapshot = new Published(_w, _hasTable);
+                Trim(_writerRoot, _stamp);
+                var snapshot = new Published(_writerRoot, _hasTable);
                 if (snapshot.Blocks != null)
                 {
                     // A batch copies every node above a change, so a first octet whose depth-1 node is still the same
                     // object has nothing changed below it, and its published block is still right.
-                    var old = _published.Blocks!;
+                    var oldBlocks = _published.Blocks!;
                     for (var first = 0; first < 256; first++)
                     {
-                        var depth1 = Kid(_w, first);
+                        var depth1 = Kid(_writerRoot, first);
                         if (depth1 != null)
-                            snapshot.Blocks[first] = old[first] is { } block && block.Depth1 == depth1 ? block : NewBlock(depth1);
+                            snapshot.Blocks[first] = oldBlocks[first] is { } block && block.Depth1 == depth1 ? block : NewBlock(depth1);
                     }
                 }
                 Interlocked.Increment(ref _changes);
@@ -1292,7 +1309,8 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         }
         finally
         {
-            if (!published) _w = _published.Root;
+            if (!published)
+                _writerRoot = _published.Root;
             _batch = false;
             _batchFailed = false;
             _stamp++;
@@ -1306,12 +1324,13 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
 
     private SetResult Set(in TKey bits, int length, TPrefix prefix, TValue value, bool update)
     {
-        if (!_batch) _stamp++;
+        if (!_batch)
+            _stamp++;
 
         var item = new Leaf { Bits = TKey.Truncate(bits, length), Mask = TKey.MaskFor(length), Length = length, Entry = new Entry { Prefix = prefix, Value = value } };
         var path = new NodeStack();
         Span<int> octets = stackalloc int[17];
-        var n = _w;
+        var node = _writerRoot;
         var depth = 0;
         Node changed;
         var added = true;
@@ -1324,52 +1343,55 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             if (relative < 8)
             {
                 var index = ArtTables.PrefixToIndex(octet, relative);
-                if (n.Prefixes.Test(index))
+                if (node.Prefixes.Test(index))
                 {
-                    if (!update) return SetResult.Present;
-                    changed = Writable(n);
+                    if (!update)
+                        return SetResult.Present;
+                    changed = Writable(node);
                     changed.PrefixEntries = ReplaceAt(changed.PrefixEntries, changed.Prefixes.PopCount(), changed.Prefixes.Rank(index) - 1, in item.Entry, ref changed.Shared, PrefixArray);
                     added = false;
                     break;
                 }
 
-                changed = Writable(n);
+                changed = Writable(node);
                 InsertPrefix(changed, index, in item.Entry);
                 break;
             }
 
             if (relative == 8)
             {
-                if (n.Fringes.Test(octet))
+                if (node.Fringes.Test(octet))
                 {
-                    if (!update) return SetResult.Present;
-                    changed = Writable(n);
+                    if (!update)
+                        return SetResult.Present;
+                    changed = Writable(node);
                     changed.FringeEntries = ReplaceAt(changed.FringeEntries, changed.Fringes.PopCount(), changed.Fringes.Rank(octet) - 1, in item.Entry, ref changed.Shared, FringeArray);
                     added = false;
                     break;
                 }
 
-                changed = Writable(n);
+                changed = Writable(node);
                 InsertFringe(changed, octet, in item.Entry);
                 break;
             }
 
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                path[depth] = n;
+                path[depth] = node;
                 octets[depth] = octet;
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 depth++;
                 continue;
             }
 
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                var existing = n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                var existing = node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 if (existing.Length == length && TKey.MatchesUnderMask(item.Bits, existing.Bits, existing.Mask))
                 {
-                    if (!update) return SetResult.Present;
-                    changed = Writable(n);
+                    if (!update)
+                        return SetResult.Present;
+                    changed = Writable(node);
                     changed.LeafEntries = ReplaceAt(changed.LeafEntries, changed.Leaves.PopCount(), changed.Leaves.Rank(octet) - 1, in item, ref changed.Shared, LeafArray);
                     added = false;
                     break;
@@ -1379,38 +1401,42 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
                 var child = new Node { Stamp = _stamp };
                 AddPrivate(child, depth + 1, in existing);
                 AddPrivate(child, depth + 1, in item);
-                if (!_batch) Trim(child, _stamp); // published now, so no spare capacity
-                changed = Writable(n);
+                if (!_batch)
+                    Trim(child, _stamp); // published now, so no spare capacity
+                changed = Writable(node);
                 RemoveLeaf(changed, octet);
                 InsertKid(changed, octet, child);
                 break;
             }
 
-            changed = Writable(n);
+            changed = Writable(node);
             InsertLeaf(changed, octet, in item);
             break;
         }
 
-        if (added) changed.Count++;
+        if (added)
+            changed.Count++;
 
         if (_batch)
         {
-            Link(changed, n, ref path, octets, depth);
-            if (added) AdjustCounts(in item.Bits, depth, 1);
+            Link(changed, node, ref path, octets, depth);
+            if (added)
+                AdjustCounts(in item.Bits, depth, 1);
         }
         else
         {
             Interlocked.Increment(ref _changes);
             try
             {
-                Link(changed, n, ref path, octets, depth);
+                Link(changed, node, ref path, octets, depth);
                 UpdateTable(in item.Bits, depth);
             }
             finally
             {
                 // Link never throws outside a batch, and UpdateTable can only fail to build a new block, which leaves
                 // the block out and lookups right; so the counts are adjusted and the counter made even regardless
-                if (added) AdjustPublishedCounts(ref path, depth, 1);
+                if (added)
+                    AdjustPublishedCounts(ref path, depth, 1);
                 Interlocked.Increment(ref _changes);
             }
         }
@@ -1420,12 +1446,13 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
 
     private bool Delete(in TKey bits, int length)
     {
-        if (!_batch) _stamp++;
+        if (!_batch)
+            _stamp++;
 
         var key = TKey.Truncate(bits, length);
         var path = new NodeStack();
         Span<int> octets = stackalloc int[17];
-        var n = _w;
+        var node = _writerRoot;
         var depth = 0;
         Node changed;
 
@@ -1437,33 +1464,37 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             if (relative < 8)
             {
                 var index = ArtTables.PrefixToIndex(octet, relative);
-                if (!n.Prefixes.Test(index)) return false;
-                changed = Writable(n);
+                if (!node.Prefixes.Test(index))
+                    return false;
+                changed = Writable(node);
                 RemovePrefix(changed, index);
                 break;
             }
 
             if (relative == 8)
             {
-                if (!n.Fringes.Test(octet)) return false;
-                changed = Writable(n);
+                if (!node.Fringes.Test(octet))
+                    return false;
+                changed = Writable(node);
                 RemoveFringe(changed, octet);
                 break;
             }
 
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                path[depth] = n;
+                path[depth] = node;
                 octets[depth] = octet;
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 depth++;
                 continue;
             }
 
-            if (!n.Leaves.Test(octet)) return false;
-            ref var leaf = ref n.LeafEntries[n.Leaves.Rank(octet) - 1];
-            if (leaf.Length != length || !TKey.MatchesUnderMask(key, leaf.Bits, leaf.Mask)) return false;
-            changed = Writable(n);
+            if (!node.Leaves.Test(octet))
+                return false;
+            ref var leaf = ref node.LeafEntries[node.Leaves.Rank(octet) - 1];
+            if (leaf.Length != length || !TKey.MatchesUnderMask(key, leaf.Bits, leaf.Mask))
+                return false;
+            changed = Writable(node);
             RemoveLeaf(changed, octet);
             break;
         }
@@ -1472,7 +1503,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
 
         // keep the shape canonical: a child holding one prefix becomes a leaf in its parent, an empty child goes away,
         // and the parent may then need the same
-        var original = n;
+        var original = node;
         while (depth > 0 && changed.Count <= 1)
         {
             var parent = path[depth - 1];
@@ -1516,7 +1547,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     }
 
     // a node the current write may change in place: itself if this write or batch created it, otherwise a copy
-    private Node Writable(Node n) => n.Stamp == _stamp ? n : n.Copy(_stamp);
+    private Node Writable(Node node) => node.Stamp == _stamp ? node : node.Copy(_stamp);
 
     // publishes a changed node in place of the original with one reference write
     private void Link(Node changed, Node original, ref NodeStack path, Span<int> octets, int depth)
@@ -1525,19 +1556,20 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         {
             if (depth == 0)
             {
-                _w = changed;
-                if (!_batch) Volatile.Write(ref _published.Root, changed);
+                _writerRoot = changed;
+                if (!_batch)
+                    Volatile.Write(ref _published.Root, changed);
                 return;
             }
 
             var parent = path[depth - 1];
-            var at = parent.Kids.Rank(octets[depth - 1]) - 1;
+            var kidIndex = parent.Kids.Rank(octets[depth - 1]) - 1;
             if (_batch && parent.Stamp != _stamp)
             {
                 // during a batch readers must not see any change yet, so the parents are copied up to the root
                 var copy = Writable(parent);
                 OwnKidArray(copy);
-                copy.KidNodes[at] = changed;
+                copy.KidNodes[kidIndex] = changed;
                 changed = copy;
                 original = parent;
                 depth--;
@@ -1545,8 +1577,9 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             }
 
             // a parent this write or batch copied may still share its child array with the published original
-            if (parent.Stamp == _stamp) OwnKidArray(parent);
-            Volatile.Write(ref parent.KidNodes[at], changed);
+            if (parent.Stamp == _stamp)
+                OwnKidArray(parent);
+            Volatile.Write(ref parent.KidNodes[kidIndex], changed);
             return;
         }
     }
@@ -1555,96 +1588,97 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     // changes only once lookups see the change.
     private static void AdjustPublishedCounts(ref NodeStack path, int depth, int delta)
     {
-        for (var i = 0; i < depth; i++)
-            Volatile.Write(ref path[i].Count, path[i].Count + delta);
+        for (var level = 0; level < depth; level++)
+            Volatile.Write(ref path[level].Count, path[level].Count + delta);
     }
 
-    private static void OwnKidArray(Node n)
+    private static void OwnKidArray(Node node)
     {
-        if ((n.Shared & KidArray) == 0) return;
-        n.KidNodes = (Node[])n.KidNodes.Clone();
-        n.Shared &= unchecked((byte)~KidArray);
+        if ((node.Shared & KidArray) == 0)
+            return;
+        node.KidNodes = (Node[])node.KidNodes.Clone();
+        node.Shared &= unchecked((byte)~KidArray);
     }
 
     // During a batch the counts of the nodes above a change are adjusted only after Link has made them private, so that
     // an aborted batch leaves the published nodes untouched. A private node's parents are always private.
     private void AdjustCounts(in TKey key, int depth, int delta)
     {
-        var n = _w;
-        for (var i = 0; i < depth; i++)
+        var node = _writerRoot;
+        for (var level = 0; level < depth; level++)
         {
-            n.Count += delta;
-            n = n.KidNodes[n.Kids.Rank(TKey.GetBits(key, i << 3, 8)) - 1];
+            node.Count += delta;
+            node = node.KidNodes[node.Kids.Rank(TKey.GetBits(key, level << 3, 8)) - 1];
         }
     }
 
     // adds an item below a node that this write created, changing nodes in place
-    private void AddPrivate(Node n, int depth, in Leaf item)
+    private void AddPrivate(Node node, int depth, in Leaf item)
     {
         while (true)
         {
-            n.Count++;
+            node.Count++;
             var octet = TKey.GetBits(item.Bits, depth << 3, 8);
             var relative = item.Length - (depth << 3);
             if (relative < 8)
             {
-                InsertPrefix(n, ArtTables.PrefixToIndex(octet, relative), in item.Entry);
+                InsertPrefix(node, ArtTables.PrefixToIndex(octet, relative), in item.Entry);
                 return;
             }
 
             if (relative == 8)
             {
-                InsertFringe(n, octet, in item.Entry);
+                InsertFringe(node, octet, in item.Entry);
                 return;
             }
 
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                n = n.KidNodes[n.Kids.Rank(octet) - 1];
+                node = node.KidNodes[node.Kids.Rank(octet) - 1];
                 depth++;
                 continue;
             }
 
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                var existing = n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                var existing = node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 var child = new Node { Stamp = _stamp };
                 AddPrivate(child, depth + 1, in existing);
-                RemoveLeaf(n, octet);
-                InsertKid(n, octet, child);
-                n = child;
+                RemoveLeaf(node, octet);
+                InsertKid(node, octet, child);
+                node = child;
                 depth++;
                 continue;
             }
 
-            InsertLeaf(n, octet, in item);
+            InsertLeaf(node, octet, in item);
             return;
         }
     }
 
     // the one prefix left in a node at the given depth, which lies on the path of key, as a leaf
-    private static Leaf SingleItem(Node n, int depth, in TKey key)
+    private static Leaf SingleItem(Node node, int depth, in TKey key)
     {
-        if (!n.Leaves.IsEmpty)
-            return n.LeafEntries[0];
+        if (!node.Leaves.IsEmpty)
+            return node.LeafEntries[0];
 
         var start = TKey.Truncate(key, depth << 3);
         int length;
         TKey bits;
         Entry entry;
-        if (!n.Fringes.IsEmpty)
+        if (!node.Fringes.IsEmpty)
         {
-            bits = TKey.SetBits(start, depth << 3, 8, n.Fringes.First());
+            bits = TKey.SetBits(start, depth << 3, 8, node.Fringes.First());
             length = (depth << 3) + 8;
-            entry = n.FringeEntries[0];
+            entry = node.FringeEntries[0];
         }
         else
         {
-            var index = n.Prefixes.First();
+            var index = node.Prefixes.First();
             var relative = ArtTables.IndexToLength(index);
             bits = relative == 0 ? start : TKey.SetBits(start, depth << 3, relative, index - (1 << relative));
             length = (depth << 3) + relative;
-            entry = n.PrefixEntries[0];
+            entry = node.PrefixEntries[0];
         }
 
         return new Leaf { Bits = bits, Mask = TKey.MaskFor(length), Length = length, Entry = entry };
@@ -1656,14 +1690,16 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     private void UpdateTable(in TKey key, int depth)
     {
         var blocks = _published.Blocks;
-        if (blocks == null || depth > 2) return;
+        if (blocks == null || depth > 2)
+            return;
         var first = TKey.GetBits(key, 0, 8);
-        var depth1 = Kid(_w, first);
+        var depth1 = Kid(_writerRoot, first);
         ref var slot = ref blocks[first];
         var block = slot;
         if (depth1 == null)
         {
-            if (block != null) Volatile.Write(ref slot, null);
+            if (block != null)
+                Volatile.Write(ref slot, null);
             return;
         }
 
@@ -1682,12 +1718,14 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
 
         // a change at the root leaves the depth-1 node alone; a change at depth 1 replaced it with a copy whose children
         // may differ
-        if (block.Depth1 == depth1) return;
+        if (block.Depth1 == depth1)
+            return;
         Volatile.Write(ref block.Depth1, depth1);
         for (var second = 0; second < 256; second++)
         {
             var depth2 = Kid(depth1, second);
-            if (block.Depth2[second] != depth2) Volatile.Write(ref block.Depth2[second], depth2);
+            if (block.Depth2[second] != depth2)
+                Volatile.Write(ref block.Depth2[second], depth2);
         }
     }
 
@@ -1700,56 +1738,56 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         return block;
     }
 
-    private static Node? Kid(Node n, int octet) => n.Kids.Test(octet) ? n.KidNodes[n.Kids.Rank(octet) - 1] : null;
+    private static Node? Kid(Node node, int octet) => node.Kids.Test(octet) ? node.KidNodes[node.Kids.Rank(octet) - 1] : null;
 
     // ---- node arrays -----------------------------------------------------------------------------------------------
 
-    private static void InsertPrefix(Node n, int index, in Entry entry)
+    private static void InsertPrefix(Node node, int index, in Entry entry)
     {
-        n.PrefixEntries = InsertAt(n.PrefixEntries, n.Prefixes.PopCount(), n.Prefixes.Rank(index), in entry, ref n.Shared, PrefixArray);
-        n.Prefixes.Set(index);
+        node.PrefixEntries = InsertAt(node.PrefixEntries, node.Prefixes.PopCount(), node.Prefixes.Rank(index), in entry, ref node.Shared, PrefixArray);
+        node.Prefixes.Set(index);
     }
 
-    private static void RemovePrefix(Node n, int index)
+    private static void RemovePrefix(Node node, int index)
     {
-        n.PrefixEntries = RemoveAt(n.PrefixEntries, n.Prefixes.PopCount(), n.Prefixes.Rank(index) - 1, ref n.Shared, PrefixArray);
-        n.Prefixes.Clear(index);
+        node.PrefixEntries = RemoveAt(node.PrefixEntries, node.Prefixes.PopCount(), node.Prefixes.Rank(index) - 1, ref node.Shared, PrefixArray);
+        node.Prefixes.Clear(index);
     }
 
-    private static void InsertFringe(Node n, int octet, in Entry entry)
+    private static void InsertFringe(Node node, int octet, in Entry entry)
     {
-        n.FringeEntries = InsertAt(n.FringeEntries, n.Fringes.PopCount(), n.Fringes.Rank(octet), in entry, ref n.Shared, FringeArray);
-        n.Fringes.Set(octet);
+        node.FringeEntries = InsertAt(node.FringeEntries, node.Fringes.PopCount(), node.Fringes.Rank(octet), in entry, ref node.Shared, FringeArray);
+        node.Fringes.Set(octet);
     }
 
-    private static void RemoveFringe(Node n, int octet)
+    private static void RemoveFringe(Node node, int octet)
     {
-        n.FringeEntries = RemoveAt(n.FringeEntries, n.Fringes.PopCount(), n.Fringes.Rank(octet) - 1, ref n.Shared, FringeArray);
-        n.Fringes.Clear(octet);
+        node.FringeEntries = RemoveAt(node.FringeEntries, node.Fringes.PopCount(), node.Fringes.Rank(octet) - 1, ref node.Shared, FringeArray);
+        node.Fringes.Clear(octet);
     }
 
-    private static void InsertKid(Node n, int octet, Node kid)
+    private static void InsertKid(Node node, int octet, Node kid)
     {
-        n.KidNodes = InsertAt(n.KidNodes, n.Kids.PopCount(), n.Kids.Rank(octet), in kid, ref n.Shared, KidArray);
-        n.Kids.Set(octet);
+        node.KidNodes = InsertAt(node.KidNodes, node.Kids.PopCount(), node.Kids.Rank(octet), in kid, ref node.Shared, KidArray);
+        node.Kids.Set(octet);
     }
 
-    private static void RemoveKid(Node n, int octet)
+    private static void RemoveKid(Node node, int octet)
     {
-        n.KidNodes = RemoveAt(n.KidNodes, n.Kids.PopCount(), n.Kids.Rank(octet) - 1, ref n.Shared, KidArray);
-        n.Kids.Clear(octet);
+        node.KidNodes = RemoveAt(node.KidNodes, node.Kids.PopCount(), node.Kids.Rank(octet) - 1, ref node.Shared, KidArray);
+        node.Kids.Clear(octet);
     }
 
-    private static void InsertLeaf(Node n, int octet, in Leaf leaf)
+    private static void InsertLeaf(Node node, int octet, in Leaf leaf)
     {
-        n.LeafEntries = InsertAt(n.LeafEntries, n.Leaves.PopCount(), n.Leaves.Rank(octet), in leaf, ref n.Shared, LeafArray);
-        n.Leaves.Set(octet);
+        node.LeafEntries = InsertAt(node.LeafEntries, node.Leaves.PopCount(), node.Leaves.Rank(octet), in leaf, ref node.Shared, LeafArray);
+        node.Leaves.Set(octet);
     }
 
-    private static void RemoveLeaf(Node n, int octet)
+    private static void RemoveLeaf(Node node, int octet)
     {
-        n.LeafEntries = RemoveAt(n.LeafEntries, n.Leaves.PopCount(), n.Leaves.Rank(octet) - 1, ref n.Shared, LeafArray);
-        n.Leaves.Clear(octet);
+        node.LeafEntries = RemoveAt(node.LeafEntries, node.Leaves.PopCount(), node.Leaves.Rank(octet) - 1, ref node.Shared, LeafArray);
+        node.Leaves.Clear(octet);
     }
 
     // The Insert helpers above allocate before they set the bit, so a failed allocation leaves the node as it was.
@@ -1757,65 +1795,67 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     // An array still shared with another node, or one readers can see, is replaced by an exact-size copy. An array only
     // this writer can see grows by doubling and changes in place. Array.Empty is shared by every node, so it is never
     // changed in place: with no spare capacity, the first insert always allocates.
-    private static T[] InsertAt<T>(T[] array, int count, int at, in T item, ref byte shared, byte which)
+    private static T[] InsertAt<T>(T[] array, int count, int position, in T item, ref byte shared, byte arrayFlag)
     {
-        var isShared = (shared & which) != 0;
+        var isShared = (shared & arrayFlag) != 0;
         if (!isShared && count < array.Length)
         {
-            Array.Copy(array, at, array, at + 1, count - at);
-            array[at] = item;
+            Array.Copy(array, position, array, position + 1, count - position);
+            array[position] = item;
             return array;
         }
 
         var result = new T[isShared ? count + 1 : Math.Max(4, count * 2)];
-        Array.Copy(array, 0, result, 0, at);
-        result[at] = item;
-        Array.Copy(array, at, result, at + 1, count - at);
-        shared &= (byte)~which;
+        Array.Copy(array, 0, result, 0, position);
+        result[position] = item;
+        Array.Copy(array, position, result, position + 1, count - position);
+        shared &= (byte)~arrayFlag;
         return result;
     }
 
-    private static T[] RemoveAt<T>(T[] array, int count, int at, ref byte shared, byte which)
+    private static T[] RemoveAt<T>(T[] array, int count, int position, ref byte shared, byte arrayFlag)
     {
-        if ((shared & which) == 0)
+        if ((shared & arrayFlag) == 0)
         {
-            Array.Copy(array, at + 1, array, at, count - at - 1);
+            Array.Copy(array, position + 1, array, position, count - position - 1);
             array[count - 1] = default!;
             return array;
         }
 
-        shared &= (byte)~which;
+        shared &= (byte)~arrayFlag;
         if (count == 1)
             return Array.Empty<T>();
 
         var result = new T[count - 1];
-        Array.Copy(array, 0, result, 0, at);
-        Array.Copy(array, at + 1, result, at, count - at - 1);
+        Array.Copy(array, 0, result, 0, position);
+        Array.Copy(array, position + 1, result, position, count - position - 1);
         return result;
     }
 
-    private static T[] ReplaceAt<T>(T[] array, int count, int at, in T item, ref byte shared, byte which)
+    private static T[] ReplaceAt<T>(T[] array, int count, int position, in T item, ref byte shared, byte arrayFlag)
     {
-        if ((shared & which) != 0)
+        if ((shared & arrayFlag) != 0)
         {
             array = array.AsSpan(0, count).ToArray();
-            shared &= (byte)~which;
+            shared &= (byte)~arrayFlag;
         }
 
-        array[at] = item;
+        array[position] = item;
         return array;
     }
 
     // after a batch: exact-size arrays for the nodes the batch created, marked shared so later writes copy them
-    private static void Trim(Node n, long stamp)
+    private static void Trim(Node node, long stamp)
     {
-        if (n.Stamp != stamp) return;
-        n.PrefixEntries = Exact(n.PrefixEntries, n.Prefixes.PopCount());
-        n.FringeEntries = Exact(n.FringeEntries, n.Fringes.PopCount());
-        n.KidNodes = Exact(n.KidNodes, n.Kids.PopCount());
-        n.LeafEntries = Exact(n.LeafEntries, n.Leaves.PopCount());
-        n.Shared = AllArrays;
-        foreach (var kid in n.KidNodes) Trim(kid, stamp);
+        if (node.Stamp != stamp)
+            return;
+        node.PrefixEntries = Exact(node.PrefixEntries, node.Prefixes.PopCount());
+        node.FringeEntries = Exact(node.FringeEntries, node.Fringes.PopCount());
+        node.KidNodes = Exact(node.KidNodes, node.Kids.PopCount());
+        node.LeafEntries = Exact(node.LeafEntries, node.Leaves.PopCount());
+        node.Shared = AllArrays;
+        foreach (var kid in node.KidNodes)
+            Trim(kid, stamp);
     }
 
     private static T[] Exact<T>(T[] array, int count) => array.Length == count ? array : count == 0 ? Array.Empty<T>() : array[..count];
@@ -1836,7 +1876,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     {
         using (_lock.EnterScope())
         {
-            if (_batch || _w.Count != 0)
+            if (_batch || _writerRoot.Count != 0)
                 throw new InvalidOperationException("Only an empty trie outside a batch can be loaded.");
             foreach (ref var item in items)
             {
@@ -1851,7 +1891,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
                     if (Kid(root, first) is { } depth1)
                         published.Blocks[first] = NewBlock(depth1);
 
-            _w = root;
+            _writerRoot = root;
             Interlocked.Increment(ref _changes);
             Volatile.Write(ref _published, published);
             Interlocked.Increment(ref _changes);
@@ -1869,43 +1909,43 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     private static Node Build(Span<(TKey Bits, int Length, TPrefix Prefix, TValue Value)> items, int depth, int[] scratch)
     {
         var offset = depth << 3;
-        var n = new Node { Count = items.Length, Shared = AllArrays };
+        var node = new Node { Count = items.Length, Shared = AllArrays };
 
-        var own = 0;
-        for (var i = 0; i < items.Length; i++)
-            if (items[i].Length - offset <= 8)
+        var ownCount = 0;
+        for (var itemIndex = 0; itemIndex < items.Length; itemIndex++)
+            if (items[itemIndex].Length - offset <= 8)
             {
-                (items[i], items[own]) = (items[own], items[i]);
-                own++;
+                (items[itemIndex], items[ownCount]) = (items[ownCount], items[itemIndex]);
+                ownCount++;
             }
 
         // the prefixes inside the stride and the fringes: first the bit sets, then each entry at its rank
-        foreach (ref var item in items[..own])
+        foreach (ref var item in items[..ownCount])
         {
             var octet = TKey.GetBits(item.Bits, offset, 8);
             var relative = item.Length - offset;
-            ref var set = ref relative < 8 ? ref n.Prefixes : ref n.Fringes;
+            ref var set = ref relative < 8 ? ref node.Prefixes : ref node.Fringes;
             var bit = relative < 8 ? ArtTables.PrefixToIndex(octet, relative) : octet;
             if (set.Test(bit))
                 throw new ArgumentException($"The prefix {item.Prefix} appears more than once.", nameof(items));
             set.Set(bit);
         }
 
-        n.PrefixEntries = NewArray<Entry>(n.Prefixes.PopCount());
-        n.FringeEntries = NewArray<Entry>(n.Fringes.PopCount());
-        foreach (ref var item in items[..own])
+        node.PrefixEntries = NewArray<Entry>(node.Prefixes.PopCount());
+        node.FringeEntries = NewArray<Entry>(node.Fringes.PopCount());
+        foreach (ref var item in items[..ownCount])
         {
             var octet = TKey.GetBits(item.Bits, offset, 8);
             var relative = item.Length - offset;
             var entry = new Entry { Prefix = item.Prefix, Value = item.Value };
             if (relative < 8)
-                n.PrefixEntries[n.Prefixes.Rank(ArtTables.PrefixToIndex(octet, relative)) - 1] = entry;
+                node.PrefixEntries[node.Prefixes.Rank(ArtTables.PrefixToIndex(octet, relative)) - 1] = entry;
             else
-                n.FringeEntries[n.Fringes.Rank(octet) - 1] = entry;
+                node.FringeEntries[node.Fringes.Rank(octet) - 1] = entry;
         }
 
         // the longer items, into one run per octet: count them, then move each into its run (American flag sort)
-        var below = items[own..];
+        var below = items[ownCount..];
         var counts = scratch.AsSpan(depth * 768, 256);
         var starts = scratch.AsSpan(depth * 768 + 256, 256);
         var fill = scratch.AsSpan(depth * 768 + 512, 256);
@@ -1921,11 +1961,13 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             previous = octet;
         }
 
-        int kids = 0, leaves = 0, start = 0;
+        int kidCount = 0, leafCount = 0, start = 0;
         for (var octet = occupied.First(); octet < 256; octet = occupied.NextSet(octet + 1))
         {
-            if (counts[octet] == 1) leaves++;
-            else kids++;
+            if (counts[octet] == 1)
+                leafCount++;
+            else
+                kidCount++;
             starts[octet] = fill[octet] = start;
             start += counts[octet];
         }
@@ -1940,13 +1982,13 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
                     continue;
                 }
 
-                var to = fill[target]++;
-                (below[fill[octet]], below[to]) = (below[to], below[fill[octet]]);
+                var targetPosition = fill[target]++;
+                (below[fill[octet]], below[targetPosition]) = (below[targetPosition], below[fill[octet]]);
             }
 
-        n.KidNodes = NewArray<Node>(kids);
-        n.LeafEntries = NewArray<Leaf>(leaves);
-        int k = 0, l = 0;
+        node.KidNodes = NewArray<Node>(kidCount);
+        node.LeafEntries = NewArray<Leaf>(leafCount);
+        int kidIndex = 0, leafIndex = 0;
         for (var octet = occupied.First(); octet < 256; octet = occupied.NextSet(octet + 1))
         {
             var run = below.Slice(starts[octet], counts[octet]);
@@ -1954,17 +1996,17 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             if (run.Length == 1)
             {
                 ref var item = ref run[0];
-                n.Leaves.Set(octet);
-                n.LeafEntries[l++] = new Leaf { Bits = item.Bits, Mask = TKey.MaskFor(item.Length), Length = item.Length, Entry = new Entry { Prefix = item.Prefix, Value = item.Value } };
+                node.Leaves.Set(octet);
+                node.LeafEntries[leafIndex++] = new Leaf { Bits = item.Bits, Mask = TKey.MaskFor(item.Length), Length = item.Length, Entry = new Entry { Prefix = item.Prefix, Value = item.Value } };
             }
             else
             {
-                n.Kids.Set(octet);
-                n.KidNodes[k++] = Build(run, depth + 1, scratch);
+                node.Kids.Set(octet);
+                node.KidNodes[kidIndex++] = Build(run, depth + 1, scratch);
             }
         }
 
-        return n;
+        return node;
     }
 
     private static T[] NewArray<T>(int count) => count == 0 ? Array.Empty<T>() : new T[count];
@@ -2001,17 +2043,19 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         {
             bytes += 24L + 8L * published.Blocks.Length;
             foreach (var block in published.Blocks)
-                if (block != null) bytes += 24L + 8L * 256;
+                if (block != null)
+                    bytes += 24L + 8L * 256;
         }
         var stack = new Stack<Node>();
         stack.Push(Volatile.Read(ref published.Root));
-        while (stack.TryPop(out var n))
+        while (stack.TryPop(out var node))
         {
             nodes++;
             bytes += 16 + 4 * 32 + 4 * 8 + 12;
-            bytes += ArrayBytes(n.PrefixEntries.Length, Unsafe.SizeOf<Entry>()) + ArrayBytes(n.FringeEntries.Length, Unsafe.SizeOf<Entry>())
-                   + ArrayBytes(n.KidNodes.Length, IntPtr.Size) + ArrayBytes(n.LeafEntries.Length, Unsafe.SizeOf<Leaf>());
-            for (var i = n.Kids.PopCount() - 1; i >= 0; i--) stack.Push(n.KidNodes[i]);
+            bytes += ArrayBytes(node.PrefixEntries.Length, Unsafe.SizeOf<Entry>()) + ArrayBytes(node.FringeEntries.Length, Unsafe.SizeOf<Entry>())
+                   + ArrayBytes(node.KidNodes.Length, IntPtr.Size) + ArrayBytes(node.LeafEntries.Length, Unsafe.SizeOf<Leaf>());
+            for (var kidIndex = node.Kids.PopCount() - 1; kidIndex >= 0; kidIndex--)
+                stack.Push(node.KidNodes[kidIndex]);
         }
 
         return new BitTrieStatistics(published.Root.Count, (int)nodes, bytes);
@@ -2032,13 +2076,14 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         return text.ToString();
     }
 
-    private static void WriteText(Node n, int depth, TKey start, Func<TKey, int, string> format, StringBuilder text)
+    private static void WriteText(Node node, int depth, TKey start, Func<TKey, int, string> format, StringBuilder text)
     {
         var indent = new string(' ', depth * 2);
         var offset = depth << 3;
         for (var index = 1; index < 256; index++)
         {
-            if (!n.Prefixes.Test(index)) continue;
+            if (!node.Prefixes.Test(index))
+                continue;
             var relative = ArtTables.IndexToLength(index);
             var bits = relative == 0 ? start : TKey.SetBits(start, offset, relative, index - (1 << relative));
             text.Append(indent).Append("prefix ").Append(format(bits, offset + relative)).AppendLine();
@@ -2047,17 +2092,17 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         for (var octet = 0; octet < 256; octet++)
         {
             var below = TKey.SetBits(start, offset, 8, octet);
-            if (n.Fringes.Test(octet))
+            if (node.Fringes.Test(octet))
                 text.Append(indent).Append("fringe ").Append(format(below, offset + 8)).AppendLine();
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                var leaf = n.LeafEntries[n.Leaves.Rank(octet) - 1];
+                var leaf = node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 text.Append(indent).Append("leaf ").Append(format(leaf.Bits, leaf.Length)).AppendLine();
             }
 
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
-                var kid = n.KidNodes[n.Kids.Rank(octet) - 1];
+                var kid = node.KidNodes[node.Kids.Rank(octet) - 1];
                 text.Append(indent).Append("node ").Append(format(below, offset + 8)).Append(", ").Append(kid.Count).Append(kid.Count == 1 ? " prefix" : " prefixes").AppendLine();
                 WriteText(kid, depth + 1, below, format, text);
             }
@@ -2072,49 +2117,50 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         var text = new StringBuilder();
         text.AppendLine("digraph trie {");
         text.AppendLine("  node [shape=box, fontname=\"monospace\"];");
-        var id = 0;
-        WriteDot(Root, 0, default, format, text, ref id, "root");
+        var nextId = 0;
+        WriteDot(Root, 0, default, format, text, ref nextId, "root");
         text.AppendLine("}");
         return text.ToString();
     }
 
-    private static int WriteDot(Node n, int depth, TKey start, Func<TKey, int, string> format, StringBuilder text, ref int id, string title)
+    private static int WriteDot(Node node, int depth, TKey start, Func<TKey, int, string> format, StringBuilder text, ref int nextId, string title)
     {
-        var self = id++;
+        var nodeId = nextId++;
         var offset = depth << 3;
         var label = new StringBuilder(Escape(title));
         for (var index = 1; index < 256; index++)
         {
-            if (!n.Prefixes.Test(index)) continue;
+            if (!node.Prefixes.Test(index))
+                continue;
             var relative = ArtTables.IndexToLength(index);
             var bits = relative == 0 ? start : TKey.SetBits(start, offset, relative, index - (1 << relative));
             label.Append("\\l").Append(Escape(format(bits, offset + relative)));
         }
 
         for (var octet = 0; octet < 256; octet++)
-            if (n.Fringes.Test(octet))
+            if (node.Fringes.Test(octet))
                 label.Append("\\l").Append(Escape(format(TKey.SetBits(start, offset, 8, octet), offset + 8)));
-        text.Append("  n").Append(self).Append(" [label=\"").Append(label).AppendLine("\\l\"];");
+        text.Append("  n").Append(nodeId).Append(" [label=\"").Append(label).AppendLine("\\l\"];");
 
         for (var octet = 0; octet < 256; octet++)
         {
-            if (n.Leaves.Test(octet))
+            if (node.Leaves.Test(octet))
             {
-                var leaf = n.LeafEntries[n.Leaves.Rank(octet) - 1];
-                var leafId = id++;
+                var leaf = node.LeafEntries[node.Leaves.Rank(octet) - 1];
+                var leafId = nextId++;
                 text.Append("  n").Append(leafId).Append(" [shape=ellipse, label=\"").Append(Escape(format(leaf.Bits, leaf.Length))).AppendLine("\"];");
-                text.Append("  n").Append(self).Append(" -> n").Append(leafId).AppendLine(";");
+                text.Append("  n").Append(nodeId).Append(" -> n").Append(leafId).AppendLine(";");
             }
 
-            if (n.Kids.Test(octet))
+            if (node.Kids.Test(octet))
             {
                 var below = TKey.SetBits(start, offset, 8, octet);
-                var kid = WriteDot(n.KidNodes[n.Kids.Rank(octet) - 1], depth + 1, below, format, text, ref id, format(below, offset + 8));
-                text.Append("  n").Append(self).Append(" -> n").Append(kid).AppendLine(";");
+                var kidId = WriteDot(node.KidNodes[node.Kids.Rank(octet) - 1], depth + 1, below, format, text, ref nextId, format(below, offset + 8));
+                text.Append("  n").Append(nodeId).Append(" -> n").Append(kidId).AppendLine(";");
             }
         }
 
-        return self;
+        return nodeId;
     }
 
     private static string Escape(string text) => text.Replace("\\", "\\\\").Replace("\"", "\\\"");

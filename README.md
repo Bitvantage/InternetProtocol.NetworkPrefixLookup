@@ -197,7 +197,7 @@ from its data. To choose it yourself:
 var small = routes.Freeze(new FrozenBitTrieOptions { Layout = FrozenLayout.Compressed });
 ```
 
-`Freeze(ipv4, ipv6)` takes separate options for each address family.
+`Freeze(ipv4Options, ipv6Options)` takes separate options for each address family.
 
 ## MaxMind databases
 
@@ -255,10 +255,10 @@ For a network type of your own, implement `IIPPrefixAdapter<TPrefix>` on an empt
 ```csharp
 public readonly struct MyNetworkAdapter : IIPPrefixAdapter<MyNetwork>
 {
-    public static bool IsIPv4(MyNetwork n) => n.Address.AddressFamily == AddressFamily.InterNetwork;
-    public static uint GetIPv4Bits(MyNetwork n) => IPAddressBits.ToIPv4Bits(n.Address);
-    public static UInt128 GetIPv6Bits(MyNetwork n) => IPAddressBits.ToIPv6Bits(n.Address);
-    public static int GetLength(MyNetwork n) => n.Length;
+    public static bool IsIPv4(MyNetwork network) => network.Address.AddressFamily == AddressFamily.InterNetwork;
+    public static uint GetIPv4Bits(MyNetwork network) => IPAddressBits.ToIPv4Bits(network.Address);
+    public static UInt128 GetIPv6Bits(MyNetwork network) => IPAddressBits.ToIPv6Bits(network.Address);
+    public static int GetLength(MyNetwork network) => network.Length;
 }
 
 var lookup = new IPPrefixLookup<MyNetwork, MyNetworkAdapter, string>();

@@ -43,8 +43,8 @@ namespace Bitvantage.InternetProtocol.NetworkPrefixLookup;
 public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup<TPrefix, TValue>
     where TAdapter : struct, IIPPrefixAdapter<TPrefix>
 {
-    private readonly BitTrie<Bits32, TPrefix, TValue> _v4;
-    private readonly BitTrie<Bits128, TPrefix, TValue> _v6;
+    private readonly BitTrie<Bits32, TPrefix, TValue> _ipv4Trie;
+    private readonly BitTrie<Bits128, TPrefix, TValue> _ipv6Trie;
     private readonly IPLookupReader<TPrefix, TAdapter, TValue, ReadWriteForm> _reader;
 
     /// <summary>Creates an empty lookup.</summary>
@@ -53,12 +53,12 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     {
     }
 
-    private IPPrefixLookup(BitTrie<Bits32, TPrefix, TValue> v4, BitTrie<Bits128, TPrefix, TValue> v6, IPLookupOptions? options)
+    private IPPrefixLookup(BitTrie<Bits32, TPrefix, TValue> ipv4Trie, BitTrie<Bits128, TPrefix, TValue> ipv6Trie, IPLookupOptions? options)
     {
-        _v4 = v4;
-        _v6 = v6;
+        _ipv4Trie = ipv4Trie;
+        _ipv6Trie = ipv6Trie;
         Options = options ?? new IPLookupOptions();
-        _reader = new(v4, v6, Options.MapIPv4MappedAddresses);
+        _reader = new(ipv4Trie, ipv6Trie, Options.MapIPv4MappedAddresses);
     }
 
     /// <summary>Creates a lookup holding the given prefixes, built in one pass.</summary>
@@ -114,31 +114,33 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
         ArgumentNullException.ThrowIfNull(items);
 
         // a collection can be read twice, so each family's buffer gets its exact size instead of growing by doubling
-        var ipv4 = 0;
-        var ipv6 = 0;
+        var ipv4PrefixCount = 0;
+        var ipv6PrefixCount = 0;
         if (items is ICollection<TItem> or IReadOnlyCollection<TItem>)
             foreach (var item in items)
             {
                 var prefix = TShape.Prefix(in item);
                 IPAddressBits.ThrowIfNull(prefix);
-                if (TAdapter.IsIPv4(prefix)) ipv4++;
-                else ipv6++;
+                if (TAdapter.IsIPv4(prefix))
+                    ipv4PrefixCount++;
+                else
+                    ipv6PrefixCount++;
             }
 
-        var v4 = new List<(Bits32 Bits, int Length, TPrefix Prefix, TValue Value)>(ipv4);
-        var v6 = new List<(Bits128 Bits, int Length, TPrefix Prefix, TValue Value)>(ipv6);
+        var ipv4Prefixes = new List<(Bits32 Bits, int Length, TPrefix Prefix, TValue Value)>(ipv4PrefixCount);
+        var ipv6Prefixes = new List<(Bits128 Bits, int Length, TPrefix Prefix, TValue Value)>(ipv6PrefixCount);
         foreach (var item in items)
         {
             var prefix = TShape.Prefix(in item);
             IPAddressBits.ThrowIfNull(prefix);
             if (TAdapter.IsIPv4(prefix))
-                v4.Add((new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, TShape.Value(in item)));
+                ipv4Prefixes.Add((new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, TShape.Value(in item)));
             else
-                v6.Add((StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, TShape.Value(in item)));
+                ipv6Prefixes.Add((StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, TShape.Value(in item)));
         }
 
-        _v4.Load(CollectionsMarshal.AsSpan(v4));
-        _v6.Load(CollectionsMarshal.AsSpan(v6));
+        _ipv4Trie.Load(CollectionsMarshal.AsSpan(ipv4Prefixes));
+        _ipv6Trie.Load(CollectionsMarshal.AsSpan(ipv6Prefixes));
     }
 
     /// <summary>
@@ -146,7 +148,7 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     ///     check that they are still current with one comparison.
     /// </summary>
     /// <remarks>Read it before the lookups whose results it is to vouch for: a value read after them may already count a change they missed.</remarks>
-    public long Version => _v4.Version + _v6.Version;
+    public long Version => _ipv4Trie.Version + _ipv6Trie.Version;
 
     // ---- lookups, written once in IPLookupReader -------------------------------------------------------------------
 
@@ -261,8 +263,8 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     {
         IPAddressBits.ThrowIfNull(prefix);
         return TAdapter.IsIPv4(prefix)
-            ? _v4.TryAdd(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, value)
-            : _v6.TryAdd(StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, value);
+            ? _ipv4Trie.TryAdd(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, value)
+            : _ipv6Trie.TryAdd(StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, value);
     }
 
     /// <summary>Adds a prefix.</summary>
@@ -290,8 +292,8 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     {
         IPAddressBits.ThrowIfNull(prefix);
         return TAdapter.IsIPv4(prefix)
-            ? _v4.AddOrUpdate(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, value)
-            : _v6.AddOrUpdate(StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, value);
+            ? _ipv4Trie.AddOrUpdate(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, value)
+            : _ipv6Trie.AddOrUpdate(StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, value);
     }
 
     /// <summary>Returns the value of a prefix, adding it with a value from <paramref name="valueFactory" /> if absent.</summary>
@@ -305,8 +307,8 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     {
         IPAddressBits.ThrowIfNull(prefix);
         return TAdapter.IsIPv4(prefix)
-            ? _v4.GetOrAdd(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, valueFactory)
-            : _v6.GetOrAdd(StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, valueFactory);
+            ? _ipv4Trie.GetOrAdd(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, valueFactory)
+            : _ipv6Trie.GetOrAdd(StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, valueFactory);
     }
 
     /// <summary>Removes a prefix and returns its value. Returns false when it is not present.</summary>
@@ -316,8 +318,8 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     {
         IPAddressBits.ThrowIfNull(prefix);
         return TAdapter.IsIPv4(prefix)
-            ? _v4.Remove(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), out value)
-            : _v6.Remove(new Bits128(TAdapter.GetIPv6Bits(prefix)), TAdapter.GetLength(prefix), out value);
+            ? _ipv4Trie.Remove(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), out value)
+            : _ipv6Trie.Remove(new Bits128(TAdapter.GetIPv6Bits(prefix)), TAdapter.GetLength(prefix), out value);
     }
 
     /// <summary>Removes a prefix only when its value equals <paramref name="expectedValue" />.</summary>
@@ -332,8 +334,8 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     {
         IPAddressBits.ThrowIfNull(prefix);
         return TAdapter.IsIPv4(prefix)
-            ? _v4.TryRemove(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), expectedValue)
-            : _v6.TryRemove(new Bits128(TAdapter.GetIPv6Bits(prefix)), TAdapter.GetLength(prefix), expectedValue);
+            ? _ipv4Trie.TryRemove(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), expectedValue)
+            : _ipv6Trie.TryRemove(new Bits128(TAdapter.GetIPv6Bits(prefix)), TAdapter.GetLength(prefix), expectedValue);
     }
 
     /// <summary>
@@ -354,8 +356,8 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     {
         IPAddressBits.ThrowIfNull(prefix);
         return TAdapter.IsIPv4(prefix)
-            ? _v4.TryUpdate(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, newValue, expectedValue)
-            : _v6.TryUpdate(StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, newValue, expectedValue);
+            ? _ipv4Trie.TryUpdate(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix), prefix, newValue, expectedValue)
+            : _ipv6Trie.TryUpdate(StoredIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, newValue, expectedValue);
     }
 
     // The bits of an IPv6 prefix to store. With mapping on, an address lookup sends every IPv4-mapped address to the IPv4
@@ -377,15 +379,15 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     {
         IPAddressBits.ThrowIfNull(prefix);
         return TAdapter.IsIPv4(prefix)
-            ? _v4.Remove(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix))
-            : _v6.Remove(new Bits128(TAdapter.GetIPv6Bits(prefix)), TAdapter.GetLength(prefix));
+            ? _ipv4Trie.Remove(new Bits32(TAdapter.GetIPv4Bits(prefix)), TAdapter.GetLength(prefix))
+            : _ipv6Trie.Remove(new Bits128(TAdapter.GetIPv6Bits(prefix)), TAdapter.GetLength(prefix));
     }
 
     /// <summary>Removes every prefix.</summary>
     public void Clear()
     {
-        _v4.Clear();
-        _v6.Clear();
+        _ipv4Trie.Clear();
+        _ipv6Trie.Clear();
     }
 
     /// <summary>
@@ -401,28 +403,28 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     /// <exception cref="InvalidOperationException">A batch is already in progress.</exception>
     public WriteBatch BeginBatch()
     {
-        var v4 = _v4.BeginBatch();
+        var ipv4Batch = _ipv4Trie.BeginBatch();
         try
         {
-            return new WriteBatch(new FamilyBatches(v4, _v6.BeginBatch()));
+            return new WriteBatch(new FamilyBatches(ipv4Batch, _ipv6Trie.BeginBatch()));
         }
         catch
         {
-            v4.Dispose();
+            ipv4Batch.Dispose();
             throw;
         }
     }
 
     // An IP lookup's batch: one batch on each family's trie. Both are checked before either ends, and IPv4 commits first.
-    private sealed class FamilyBatches(WriteBatch v4, WriteBatch v6) : IBatchOwner
+    private sealed class FamilyBatches(WriteBatch ipv4Batch, WriteBatch ipv6Batch) : IBatchOwner
     {
         public void CheckBatchThread()
         {
-            v4.CheckThread();
-            v6.CheckThread();
+            ipv4Batch.CheckThread();
+            ipv6Batch.CheckThread();
         }
 
-        public bool BatchFailed => v4.Failed || v6.Failed;
+        public bool BatchFailed => ipv4Batch.Failed || ipv6Batch.Failed;
 
         public void EndBatch(bool commit)
         {
@@ -436,11 +438,11 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
             {
                 try
                 {
-                    v6.Dispose();
+                    ipv6Batch.Dispose();
                 }
                 finally
                 {
-                    v4.Dispose();
+                    ipv4Batch.Dispose();
                 }
 
                 return;
@@ -448,16 +450,16 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
 
             try
             {
-                v4.Commit();
+                ipv4Batch.Commit();
             }
             catch
             {
                 // nothing is published yet, so the IPv6 changes go too
-                v6.Dispose();
+                ipv6Batch.Dispose();
                 throw;
             }
 
-            v6.Commit();
+            ipv6Batch.Commit();
         }
     }
 
@@ -473,35 +475,35 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     public FrozenIPPrefixLookup<TPrefix, TAdapter, TValue> Freeze(FrozenBitTrieOptions? options = null) => new(this, options, options);
 
     /// <summary>Builds a read-only copy with a different layout for each address family. See <see cref="Freeze(FrozenBitTrieOptions?)" />.</summary>
-    /// <param name="ipv4">The layout of the IPv4 tables.</param>
-    /// <param name="ipv6">The layout of the IPv6 tables.</param>
-    public FrozenIPPrefixLookup<TPrefix, TAdapter, TValue> Freeze(FrozenBitTrieOptions ipv4, FrozenBitTrieOptions ipv6) => new(this, ipv4, ipv6);
+    /// <param name="ipv4Options">The layout of the IPv4 tables.</param>
+    /// <param name="ipv6Options">The layout of the IPv6 tables.</param>
+    public FrozenIPPrefixLookup<TPrefix, TAdapter, TValue> Freeze(FrozenBitTrieOptions ipv4Options, FrozenBitTrieOptions ipv6Options) => new(this, ipv4Options, ipv6Options);
 
     // Both families' prefixes are copied under both writer locks, taken in BeginBatch's order, so that no batch commits
     // between the two and the copy is the lookup at one moment. The tables are built after the locks are released.
-    internal (FrozenBitTrie<Bits32, TPrefix, TValue> IPv4, FrozenBitTrie<Bits128, TPrefix, TValue> IPv6) FreezeParts(FrozenBitTrieOptions? ipv4, FrozenBitTrieOptions? ipv6)
+    internal (FrozenBitTrie<Bits32, TPrefix, TValue> IPv4, FrozenBitTrie<Bits128, TPrefix, TValue> IPv6) FreezeParts(FrozenBitTrieOptions? ipv4Options, FrozenBitTrieOptions? ipv6Options)
     {
-        FrozenBitTrie<Bits32, TPrefix, TValue>.Contents v4;
-        FrozenBitTrie<Bits128, TPrefix, TValue>.Contents v6;
-        using (_v4.WriterLock.EnterScope())
-        using (_v6.WriterLock.EnterScope())
+        FrozenBitTrie<Bits32, TPrefix, TValue>.Contents ipv4Contents;
+        FrozenBitTrie<Bits128, TPrefix, TValue>.Contents ipv6Contents;
+        using (_ipv4Trie.WriterLock.EnterScope())
+        using (_ipv6Trie.WriterLock.EnterScope())
         {
-            v4 = _v4.CopyContents();
-            v6 = _v6.CopyContents();
+            ipv4Contents = _ipv4Trie.CopyContents();
+            ipv6Contents = _ipv6Trie.CopyContents();
         }
 
-        return (new(v4, ipv4 ?? new FrozenBitTrieOptions()), new(v6, ipv6 ?? new FrozenBitTrieOptions()));
+        return (new(ipv4Contents, ipv4Options ?? new FrozenBitTrieOptions()), new(ipv6Contents, ipv6Options ?? new FrozenBitTrieOptions()));
     }
 
     /// <summary>Counts the nodes and estimates the memory each address family holds.</summary>
-    public IPLookupStatistics GetStatistics() => new(_v4.GetStatistics(), _v6.GetStatistics());
+    public IPLookupStatistics GetStatistics() => new(_ipv4Trie.GetStatistics(), _ipv6Trie.GetStatistics());
 
     /// <summary>The structure of one address family's trie as indented text, for people and tests.</summary>
     /// <param name="family"><see cref="AddressFamily.InterNetwork" /> or <see cref="AddressFamily.InterNetworkV6" />.</param>
     public string ToTextTree(AddressFamily family)
     {
         IPAddressBits.CheckFamily(family);
-        return family == AddressFamily.InterNetwork ? _v4.ToTextTree(IPAddressBits.Format) : _v6.ToTextTree(IPAddressBits.Format);
+        return family == AddressFamily.InterNetwork ? _ipv4Trie.ToTextTree(IPAddressBits.Format) : _ipv6Trie.ToTextTree(IPAddressBits.Format);
     }
 
     /// <summary>The structure of one address family's trie in Graphviz DOT format.</summary>
@@ -509,7 +511,7 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     public string ToDotTree(AddressFamily family)
     {
         IPAddressBits.CheckFamily(family);
-        return family == AddressFamily.InterNetwork ? _v4.ToDotTree(IPAddressBits.Format) : _v6.ToDotTree(IPAddressBits.Format);
+        return family == AddressFamily.InterNetwork ? _ipv4Trie.ToDotTree(IPAddressBits.Format) : _ipv6Trie.ToDotTree(IPAddressBits.Format);
     }
 }
 

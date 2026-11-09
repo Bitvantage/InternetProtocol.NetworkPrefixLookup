@@ -32,10 +32,12 @@ public class BartTrieTests
     private static BartTrie<Bits32, int, int> Build(IEnumerable<int> indexes, bool bulk = false)
     {
         var trie = new BartTrie<Bits32, int, int>(32);
-        if (bulk) trie.BeginBulkLoad();
-        foreach (var i in indexes)
-            Assert.That(trie.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i * 7), Is.True);
-        if (bulk) trie.EndBulkLoad();
+        if (bulk)
+            trie.BeginBulkLoad();
+        foreach (var prefixIndex in indexes)
+            Assert.That(trie.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex * 7), Is.True);
+        if (bulk)
+            trie.EndBulkLoad();
         return trie;
     }
 
@@ -45,19 +47,19 @@ public class BartTrieTests
     private static int[] ReferenceMatches(IEnumerable<int> indexes, Bits32[] keys)
     {
         var reference = new BitTrie<uint, int, int>();
-        foreach (var i in indexes)
-            reference.TryAdd(WidthData.Prefix32[i].Value, WidthData.PrefixLengths[i], i, 0);
-        return keys.Select(k => reference.TryGetMatch(k.Value, out var p, out _) ? p : -1).ToArray();
+        foreach (var prefixIndex in indexes)
+            reference.TryAdd(WidthData.Prefix32[prefixIndex].Value, WidthData.PrefixLengths[prefixIndex], prefixIndex, 0);
+        return keys.Select(key => reference.TryGetMatch(key.Value, out var prefix, out _) ? prefix : -1).ToArray();
     }
 
     private static void AssertMatches<TKey>(BartTrie<TKey, int, int> trie, int[] expected, TKey[] keys, string because) where TKey : struct, IBitKey<TKey>
     {
         var mismatches = 0;
-        for (var i = 0; i < keys.Length; i++)
+        for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
         {
-            var found = trie.TryGetMatch(in keys[i], out var prefix, out var value);
+            var found = trie.TryGetMatch(in keys[keyIndex], out var prefix, out var value);
             var actual = found ? prefix : -1;
-            if (actual != expected[i] || (found && value != prefix * 7))
+            if (actual != expected[keyIndex] || (found && value != prefix * 7))
                 mismatches++;
         }
         Assert.That(mismatches, Is.Zero, because);
@@ -77,8 +79,8 @@ public class BartTrieTests
     public void The_same_prefixes_in_a_128_bit_key_match_the_reference()
     {
         var trie = new BartTrie<Bits128, int, int>(128);
-        for (var i = 0; i < WidthData.Prefix128.Length; i++)
-            trie.TryAdd(in WidthData.Prefix128[i], WidthData.PrefixLengths[i], i, i * 7);
+        for (var prefixIndex = 0; prefixIndex < WidthData.Prefix128.Length; prefixIndex++)
+            trie.TryAdd(in WidthData.Prefix128[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex * 7);
         AssertMatches(trie, ReferenceMatches(Enumerable.Range(0, WidthData.Prefix32.Length), WidthData.Key32), WidthData.Key128, "128-bit keys");
     }
 
@@ -86,17 +88,17 @@ public class BartTrieTests
     public void Removing_prefixes_gives_the_same_trie_as_never_adding_them()
     {
         var all = Enumerable.Range(0, WidthData.Prefix32.Length).ToArray();
-        var kept = all.Where(i => i % 5 != 0).ToArray();
+        var kept = all.Where(prefixIndex => prefixIndex % 5 != 0).ToArray();
         var trie = Build(all);
-        foreach (var i in all.Where(i => i % 5 == 0))
-            Assert.That(trie.TryRemove(in WidthData.Prefix32[i], WidthData.PrefixLengths[i]), Is.True);
+        foreach (var prefixIndex in all.Where(candidateIndex => candidateIndex % 5 == 0))
+            Assert.That(trie.TryRemove(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex]), Is.True);
 
         Assert.That(trie.Count, Is.EqualTo(kept.Length));
         Assert.That(trie.Dump(Format), Is.EqualTo(Build(kept).Dump(Format)), "shape after removal");
         AssertMatches(trie, ReferenceMatches(kept, WidthData.Key32), WidthData.Key32, "after removal");
 
-        foreach (var i in kept)
-            Assert.That(trie.TryRemove(in WidthData.Prefix32[i], WidthData.PrefixLengths[i]), Is.True);
+        foreach (var prefixIndex in kept)
+            Assert.That(trie.TryRemove(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex]), Is.True);
         Assert.That(trie.Count, Is.Zero);
         Assert.That(trie.Dump(Format), Is.Empty, "everything removed");
         Assert.That(trie.TryGetMatch(in WidthData.Key32[0], out _, out _), Is.False);
@@ -117,20 +119,20 @@ public class BartTrieTests
     public void Readers_see_nothing_of_a_bulk_load_until_it_ends()
     {
         var all = Enumerable.Range(0, WidthData.Prefix32.Length).ToArray();
-        var first = all.Where(i => i % 2 == 0).ToArray();
+        var first = all.Where(prefixIndex => prefixIndex % 2 == 0).ToArray();
         var keys = WidthData.Key32.Take(100_000).ToArray();
         var trie = Build(first);
         var before = ReferenceMatches(first, keys);
 
         trie.BeginBulkLoad();
-        foreach (var i in all.Where(i => i % 2 == 1))
-            trie.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i * 7);
-        foreach (var i in first.Where(i => i % 3 == 0))
-            trie.TryRemove(in WidthData.Prefix32[i], WidthData.PrefixLengths[i]);
+        foreach (var prefixIndex in all.Where(candidateIndex => candidateIndex % 2 == 1))
+            trie.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex * 7);
+        foreach (var prefixIndex in first.Where(candidateIndex => candidateIndex % 3 == 0))
+            trie.TryRemove(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex]);
         AssertMatches(trie, before, keys, "during the bulk load");
         trie.EndBulkLoad();
 
-        var after = all.Where(i => i % 2 == 1 || i % 3 != 0).ToArray();
+        var after = all.Where(prefixIndex => prefixIndex % 2 == 1 || prefixIndex % 3 != 0).ToArray();
         AssertMatches(trie, ReferenceMatches(after, keys), keys, "after the bulk load");
         Assert.That(trie.Dump(Format), Is.EqualTo(Build(after).Dump(Format)));
     }
@@ -139,16 +141,16 @@ public class BartTrieTests
     public void An_aborted_bulk_load_leaves_no_trace()
     {
         var all = Enumerable.Range(0, WidthData.Prefix32.Length).ToArray();
-        var first = all.Where(i => i % 2 == 0).ToArray();
+        var first = all.Where(prefixIndex => prefixIndex % 2 == 0).ToArray();
         var keys = WidthData.Key32.Take(100_000).ToArray();
         var trie = Build(first);
         var shape = trie.Dump(Format);
 
         trie.BeginBulkLoad();
-        foreach (var i in all.Where(i => i % 2 == 1))
-            trie.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i * 7);
-        foreach (var i in first.Where(i => i % 3 == 0))
-            trie.TryRemove(in WidthData.Prefix32[i], WidthData.PrefixLengths[i]);
+        foreach (var prefixIndex in all.Where(candidateIndex => candidateIndex % 2 == 1))
+            trie.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex * 7);
+        foreach (var prefixIndex in first.Where(candidateIndex => candidateIndex % 3 == 0))
+            trie.TryRemove(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex]);
         trie.AbortBulkLoad();
 
         Assert.That(trie.Count, Is.EqualTo(first.Length));
@@ -156,9 +158,9 @@ public class BartTrieTests
         AssertMatches(trie, ReferenceMatches(first, keys), keys, "after the abort");
 
         // ordinary writes afterwards rely on the subtree counts being intact
-        var kept = first.Where(i => i % 5 != 0).ToArray();
-        foreach (var i in first.Where(i => i % 5 == 0))
-            Assert.That(trie.TryRemove(in WidthData.Prefix32[i], WidthData.PrefixLengths[i]), Is.True);
+        var kept = first.Where(prefixIndex => prefixIndex % 5 != 0).ToArray();
+        foreach (var prefixIndex in first.Where(candidateIndex => candidateIndex % 5 == 0))
+            Assert.That(trie.TryRemove(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex]), Is.True);
         Assert.That(trie.Dump(Format), Is.EqualTo(Build(kept).Dump(Format)), "shape after later removals");
     }
 
@@ -184,7 +186,7 @@ public class BartTrieTests
             Assert.That(trie.TryAdd(new Bits32(bits), length, name, length), Is.True, name);
         Assert.That(trie.Count, Is.EqualTo(prefixes.Length + 1));
 
-        string? Match(uint k) => trie.TryGetMatch(new Bits32(k), out var p, out _) ? p : null;
+        string? Match(uint addressBits) => trie.TryGetMatch(new Bits32(addressBits), out var prefix, out _) ? prefix : null;
         Assert.That(Match(0x0A010203), Is.EqualTo("10.1.2.3/32"));
         Assert.That(Match(0x0A010205), Is.EqualTo("10.1.2.4/31"));
         Assert.That(Match(0x0A010206), Is.EqualTo("10.1.2/24"));
@@ -216,9 +218,10 @@ public class BartTrieTests
         var keys = WidthData.Key32.Take(50_000).ToArray();
         for (var step = 1; step <= 60_000; step++)
         {
-            var i = random.Next(WidthData.Prefix32.Length);
-            if (present.Remove(i)) Assert.That(trie.TryRemove(in WidthData.Prefix32[i], WidthData.PrefixLengths[i]), Is.True);
-            else { present.Add(i); Assert.That(trie.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i * 7), Is.True); }
+            var prefixIndex = random.Next(WidthData.Prefix32.Length);
+            if (present.Remove(prefixIndex))
+                Assert.That(trie.TryRemove(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex]), Is.True);
+            else { present.Add(prefixIndex); Assert.That(trie.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex * 7), Is.True); }
             if (step % 15_000 == 0)
             {
                 AssertMatches(trie, ReferenceMatches(present, keys), keys, $"after {step} changes");
@@ -253,32 +256,33 @@ public class BartTrieTests
     {
 
         var current = new NetworkPrefixLookup<int>();
-        for (var i = 0; i < table.Networks.Length; i++)
-            current.TryAdd(new NetworkPrefix(table.Networks[i].BaseAddress, table.Networks[i].PrefixLength), i);
+        for (var prefixIndex = 0; prefixIndex < table.Networks.Length; prefixIndex++)
+            current.TryAdd(new NetworkPrefix(table.Networks[prefixIndex].BaseAddress, table.Networks[prefixIndex].PrefixLength), prefixIndex);
 
         var trie = new BartTrie<TKey, int, int>(width);
         trie.BeginBulkLoad();
-        for (var i = 0; i < table.Bits.Length; i++)
-            trie.TryAdd(in table.Bits[i], table.Lengths[i], i, table.Asns[i]);
+        for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+            trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], prefixIndex, table.Asns[prefixIndex]);
         trie.EndBulkLoad();
 
         void Compare(string because)
         {
             var mismatches = 0;
-            for (var k = 0; k < table.Keys.Length; k++)
+            for (var keyIndex = 0; keyIndex < table.Keys.Length; keyIndex++)
             {
-                var expected = current.TryGetMatch(table.Addresses[k], out var r) ? r.Value : -1;
-                var actual = trie.TryGetMatch(in table.Keys[k], out var prefix, out _) ? prefix : -1;
-                if (expected != actual) mismatches++;
+                var expected = current.TryGetMatch(table.Addresses[keyIndex], out var currentMatch) ? currentMatch.Value : -1;
+                var actual = trie.TryGetMatch(in table.Keys[keyIndex], out var prefix, out _) ? prefix : -1;
+                if (expected != actual)
+                    mismatches++;
             }
             Assert.That(mismatches, Is.Zero, because);
         }
 
         Compare("full table");
-        for (var i = 0; i < table.Bits.Length; i += 10)
+        for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex += 10)
         {
-            Assert.That(trie.TryRemove(in table.Bits[i], table.Lengths[i]), Is.True);
-            current.Remove(new NetworkPrefix(table.Networks[i].BaseAddress, table.Networks[i].PrefixLength));
+            Assert.That(trie.TryRemove(in table.Bits[prefixIndex], table.Lengths[prefixIndex]), Is.True);
+            current.Remove(new NetworkPrefix(table.Networks[prefixIndex].BaseAddress, table.Networks[prefixIndex].PrefixLength));
         }
         Compare("after removing every tenth prefix, one at a time");
     }
@@ -290,13 +294,13 @@ public class BartTrieTests
     {
         // half the prefixes are permanent; the writer keeps adding and removing the other half
         var all = Enumerable.Range(0, WidthData.Prefix32.Length).ToArray();
-        var permanent = all.Where(i => i % 2 == 0).ToArray();
-        var churn = all.Where(i => i % 2 == 1).ToArray();
+        var permanent = all.Where(prefixIndex => prefixIndex % 2 == 0).ToArray();
+        var churn = all.Where(prefixIndex => prefixIndex % 2 == 1).ToArray();
         var keys = WidthData.Key32.Take(200_000).ToArray();
 
         // a reader must never return something less specific than the best permanent prefix for its key
         var permanentOnly = Build(permanent);
-        var minimumLength = keys.Select(k => permanentOnly.TryGetMatch(in k, out var p, out _) ? WidthData.PrefixLengths[p] : -1).ToArray();
+        var minimumLength = keys.Select(key => permanentOnly.TryGetMatch(in key, out var prefix, out _) ? WidthData.PrefixLengths[prefix] : -1).ToArray();
 
         var trie = Build(permanent);
         var stop = 0;
@@ -309,43 +313,47 @@ public class BartTrieTests
             var present = new HashSet<int>();
             while (Volatile.Read(ref stop) == 0)
             {
-                var i = churn[random.Next(churn.Length)];
-                if (present.Remove(i)) trie.TryRemove(in WidthData.Prefix32[i], WidthData.PrefixLengths[i]);
-                else { present.Add(i); trie.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i * 7); }
+                var prefixIndex = churn[random.Next(churn.Length)];
+                if (present.Remove(prefixIndex))
+                    trie.TryRemove(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex]);
+                else { present.Add(prefixIndex); trie.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex * 7); }
                 writes++;
             }
         });
 
-        var readers = Enumerable.Range(0, 3).Select(r => new Thread(() =>
+        var readers = Enumerable.Range(0, 3).Select(readerIndex => new Thread(() =>
         {
-            var random = new Random(100 + r);
+            var random = new Random(100 + readerIndex);
             while (Volatile.Read(ref stop) == 0)
             {
-                var k = random.Next(keys.Length);
-                var key = keys[k];
+                var keyIndex = random.Next(keys.Length);
+                var key = keys[keyIndex];
                 if (trie.TryGetMatch(in key, out var prefix, out var value))
                 {
                     var length = WidthData.PrefixLengths[prefix];
                     var bits = WidthData.Prefix32[prefix].Value;
                     var mask = length == 0 ? 0u : uint.MaxValue << (32 - length);
-                    if ((key.Value & mask) != bits) failures.Enqueue($"{prefix} does not contain key {k}");
-                    if (value != prefix * 7) failures.Enqueue($"value {value} does not belong to prefix {prefix}");
-                    if (length < minimumLength[k]) failures.Enqueue($"key {k}: /{length} is less specific than a permanent /{minimumLength[k]}");
+                    if ((key.Value & mask) != bits)
+                        failures.Enqueue($"{prefix} does not contain key {keyIndex}");
+                    if (value != prefix * 7)
+                        failures.Enqueue($"value {value} does not belong to prefix {prefix}");
+                    if (length < minimumLength[keyIndex])
+                        failures.Enqueue($"key {keyIndex}: /{length} is less specific than a permanent /{minimumLength[keyIndex]}");
                 }
-                else if (minimumLength[k] >= 0)
-                {
-                    failures.Enqueue($"key {k}: no match although a permanent prefix contains it");
-                }
+                else if (minimumLength[keyIndex] >= 0)
+                    failures.Enqueue($"key {keyIndex}: no match although a permanent prefix contains it");
                 Interlocked.Increment(ref lookups);
             }
         })).ToArray();
 
         writer.Start();
-        foreach (var t in readers) t.Start();
+        foreach (var readerThread in readers)
+            readerThread.Start();
         Thread.Sleep(TimeSpan.FromSeconds(15));
         Volatile.Write(ref stop, 1);
         writer.Join();
-        foreach (var t in readers) t.Join();
+        foreach (var readerThread in readers)
+            readerThread.Join();
 
         TestContext.WriteLine($"{writes:N0} writes, {lookups:N0} lookups, {failures.Count} failures");
         Assert.That(failures, Is.Empty, string.Join(Environment.NewLine, failures.Take(10)));

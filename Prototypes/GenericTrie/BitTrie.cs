@@ -93,8 +93,8 @@ public sealed class BitTrie<TBits, TPrefix, TValue> where TBits : unmanaged, IBi
 
         // case 4: siblings; the routing node is the longest common prefix, computed with one leading-zero count
         // instead of NetworkPrefix.GetContainingNetwork
-        var common = Math.Min(Math.Min(length, existing.Length), int.CreateTruncating(TBits.LeadingZeroCount(bits ^ existing.Bits)));
-        var routing = new Node(bits & MaskFor(common), common);
+        var commonLength = Math.Min(Math.Min(length, existing.Length), int.CreateTruncating(TBits.LeadingZeroCount(bits ^ existing.Bits)));
+        var routing = new Node(bits & MaskFor(commonLength), commonLength);
         routing.Children[routing.GetSlot(bits)] = node;
         routing.Children[routing.GetSlot(existing.Bits)] = existing;
         parent.Children[slot] = routing;
@@ -132,16 +132,20 @@ public sealed class BitTrie<TBits, TPrefix, TValue> where TBits : unmanaged, IBi
     /// <summary>Counts value and routing nodes, for verifying that the shape matches the current library.</summary>
     public (int Value, int Routing) CountNodes()
     {
-        int value = 0, routing = 0;
+        int valueNodeCount = 0, routingNodeCount = 0;
         var stack = new Stack<Node>();
         stack.Push(_root);
-        while (stack.TryPop(out var n))
+        while (stack.TryPop(out var node))
         {
-            if (n.HasValue) value++; else routing++;
-            foreach (var c in n.Children)
-                if (c != null) stack.Push(c);
+            if (node.HasValue)
+                valueNodeCount++;
+            else
+                routingNodeCount++;
+            foreach (var child in node.Children)
+                if (child != null)
+                    stack.Push(child);
         }
-        return (value, routing);
+        return (valueNodeCount, routingNodeCount);
     }
 
     private sealed class Node

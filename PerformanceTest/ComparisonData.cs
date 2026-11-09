@@ -48,7 +48,7 @@ public static class ComparisonData
         ["RealIPv6"] = new(() => RealIPv6.Value)
     };
 
-    private static string? Directory => Environment.GetEnvironmentVariable("ROUTEVIEWS_DIR") is { Length: > 0 } d && System.IO.Directory.Exists(d) ? d : null;
+    private static string? Directory => Environment.GetEnvironmentVariable("ROUTEVIEWS_DIR") is { Length: > 0 } directoryPath && System.IO.Directory.Exists(directoryPath) ? directoryPath : null;
 
     /// <summary>The names of the tables available: the random table always, the others when ROUTEVIEWS_DIR is set.</summary>
     public static IEnumerable<string> Names => Directory == null ? new[] { "RandomIPv4" } : Tables.Keys;
@@ -62,14 +62,14 @@ public static class ComparisonData
     public static (string File, List<(UInt128 Bits, int Length, int Asn)> Rows) ReadRouteViews(string kind, int width)
     {
         var directory = Directory ?? throw new InvalidOperationException("Set ROUTEVIEWS_DIR.");
-        var file = System.IO.Directory.GetFiles(directory, $"routeviews-{kind}-*.pfx2as").OrderBy(f => f).Last();
+        var file = System.IO.Directory.GetFiles(directory, $"routeviews-{kind}-*.pfx2as").OrderBy(filePath => filePath).Last();
         var rows = new List<(UInt128, int, int)>();
         foreach (var line in File.ReadLines(file))
         {
             var parts = line.Split('\t');
             var length = int.Parse(parts[1]);
             // the origin AS field can be a set such as "64496_64497" or "64496,64497"; keep the first AS
-            var asn = int.TryParse(parts[2].Split('_', ',')[0], out var first) ? first : 0;
+            var asn = int.TryParse(parts[2].Split('_', ',')[0], out var firstAsn) ? firstAsn : 0;
             rows.Add((ToBits(IPAddress.Parse(parts[0]), width) & Mask(length, width), length, asn));
         }
 
@@ -93,7 +93,8 @@ public static class ComparisonData
         var bits = new List<UInt128>();
         foreach (var (value, length, asn) in ReadRouteViews(kind, width).Rows)
         {
-            if (!seen.Add((value, length))) continue; // the IPv6 table lists a few prefixes twice
+            if (!seen.Add((value, length)))
+                continue; // the IPv6 table lists a few prefixes twice
             prefixes.Add((ToAddress(value, width), length));
             values.Add(asn);
             bits.Add(value);
@@ -102,12 +103,12 @@ public static class ComparisonData
         return new Table(prefixes.ToArray(), values.ToArray(), Addresses(prefixes, bits, width));
     }
 
-    private static Table Sample(Table table, int every)
+    private static Table Sample(Table table, int sampleInterval)
     {
-        var prefixes = table.Prefixes.Where((_, i) => i % every == 0).ToList();
+        var prefixes = table.Prefixes.Where((_, prefixIndex) => prefixIndex % sampleInterval == 0).ToList();
         var width = prefixes[0].Address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128;
-        var bits = prefixes.Select(p => ToBits(p.Address, width)).ToList();
-        return new Table(prefixes.ToArray(), table.Values.Where((_, i) => i % every == 0).ToArray(), Addresses(prefixes, bits, width));
+        var bits = prefixes.Select(prefix => ToBits(prefix.Address, width)).ToList();
+        return new Table(prefixes.ToArray(), table.Values.Where((_, valueIndex) => valueIndex % sampleInterval == 0).ToArray(), Addresses(prefixes, bits, width));
     }
 
     // random addresses inside randomly chosen prefixes of the table
@@ -116,13 +117,13 @@ public static class ComparisonData
         var random = new Random(42);
         var addresses = new IPAddress[1_000_000];
         var noise = new byte[16];
-        for (var i = 0; i < addresses.Length; i++)
+        for (var addressIndex = 0; addressIndex < addresses.Length; addressIndex++)
         {
-            var p = random.Next(prefixes.Count);
+            var prefixIndex = random.Next(prefixes.Count);
             random.NextBytes(noise);
             var host = new UInt128(BitConverter.ToUInt64(noise, 0), BitConverter.ToUInt64(noise, 8)) & Mask(width, width);
-            var mask = Mask(prefixes[p].Length, width);
-            addresses[i] = ToAddress((bits[p] & mask) | (host & ~mask & Mask(width, width)), width);
+            var mask = Mask(prefixes[prefixIndex].Length, width);
+            addresses[addressIndex] = ToAddress((bits[prefixIndex] & mask) | (host & ~mask & Mask(width, width)), width);
         }
 
         return addresses;
@@ -134,7 +135,7 @@ public static class ComparisonData
     {
         var random = new Random(11);
         var prefixes = new List<(IPAddress Address, int Length)>();
-        for (var i = 0; i < 100_000; i++)
+        for (var prefixIndex = 0; prefixIndex < 100_000; prefixIndex++)
         {
             var address = new IPAddress(BitConverter.GetBytes(random.NextInt64(0, 0xff_ff_ff_ffL + 1)).Take(4).ToArray());
             var length = (int)Math.Cbrt(random.Next(0, 33 * 33 * 33));
@@ -142,10 +143,10 @@ public static class ComparisonData
         }
 
         var distinct = prefixes.Distinct().ToArray();
-        var keys = new Random(12);
+        var addressRandom = new Random(12);
         var addresses = new IPAddress[1_000_000];
-        for (var i = 0; i < addresses.Length; i++)
-            addresses[i] = new IPAddress(BitConverter.GetBytes(keys.NextInt64(0, 0xff_ff_ff_ffL + 1)).Take(4).ToArray());
+        for (var addressIndex = 0; addressIndex < addresses.Length; addressIndex++)
+            addresses[addressIndex] = new IPAddress(BitConverter.GetBytes(addressRandom.NextInt64(0, 0xff_ff_ff_ffL + 1)).Take(4).ToArray());
         return new Table(distinct, Enumerable.Range(0, distinct.Length).ToArray(), addresses);
     }
 
@@ -153,14 +154,16 @@ public static class ComparisonData
     {
         var bytes = address.GetAddressBytes();
         UInt128 value = 0;
-        foreach (var b in bytes) value = (value << 8) | b;
+        foreach (var addressByte in bytes)
+            value = (value << 8) | addressByte;
         return value;
     }
 
     private static IPAddress ToAddress(UInt128 value, int width)
     {
         var bytes = new byte[width / 8];
-        for (var i = bytes.Length - 1; i >= 0; i--, value >>= 8) bytes[i] = (byte)value;
+        for (var byteIndex = bytes.Length - 1; byteIndex >= 0; byteIndex--, value >>= 8)
+            bytes[byteIndex] = (byte)value;
         return new IPAddress(bytes);
     }
 

@@ -33,30 +33,30 @@ namespace Bitvantage.InternetProtocol.NetworkPrefixLookup;
 public class FrozenIPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup<TPrefix, TValue>
     where TAdapter : struct, IIPPrefixAdapter<TPrefix>
 {
-    private readonly FrozenBitTrie<Bits32, TPrefix, TValue> _v4;
-    private readonly FrozenBitTrie<Bits128, TPrefix, TValue> _v6;
+    private readonly FrozenBitTrie<Bits32, TPrefix, TValue> _ipv4Trie;
+    private readonly FrozenBitTrie<Bits128, TPrefix, TValue> _ipv6Trie;
     private readonly IPLookupReader<TPrefix, TAdapter, TValue, FrozenForm> _reader;
 
     /// <summary>Freezes a read-write lookup. Derived classes call this from their own constructors.</summary>
     /// <param name="source">The lookup to copy.</param>
-    /// <param name="ipv4">The layout of the IPv4 tables, or null for the default.</param>
-    /// <param name="ipv6">The layout of the IPv6 tables, or null for the default.</param>
-    protected internal FrozenIPPrefixLookup(IPPrefixLookup<TPrefix, TAdapter, TValue> source, FrozenBitTrieOptions? ipv4, FrozenBitTrieOptions? ipv6)
-        : this((source ?? throw new ArgumentNullException(nameof(source))).FreezeParts(ipv4, ipv6), source.Options)
+    /// <param name="ipv4Options">The layout of the IPv4 tables, or null for the default.</param>
+    /// <param name="ipv6Options">The layout of the IPv6 tables, or null for the default.</param>
+    protected internal FrozenIPPrefixLookup(IPPrefixLookup<TPrefix, TAdapter, TValue> source, FrozenBitTrieOptions? ipv4Options, FrozenBitTrieOptions? ipv6Options)
+        : this((source ?? throw new ArgumentNullException(nameof(source))).FreezeParts(ipv4Options, ipv6Options), source.Options)
     {
     }
 
     // both families, frozen together under the read-write lookup's locks
-    private FrozenIPPrefixLookup((FrozenBitTrie<Bits32, TPrefix, TValue> V4, FrozenBitTrie<Bits128, TPrefix, TValue> V6) parts, IPLookupOptions options)
+    private FrozenIPPrefixLookup((FrozenBitTrie<Bits32, TPrefix, TValue> IPv4, FrozenBitTrie<Bits128, TPrefix, TValue> IPv6) parts, IPLookupOptions options)
     {
-        _v4 = parts.V4;
-        _v6 = parts.V6;
+        _ipv4Trie = parts.IPv4;
+        _ipv6Trie = parts.IPv6;
         Options = options;
-        _reader = new(parts.V4, parts.V6, options.MapIPv4MappedAddresses);
+        _reader = new(parts.IPv4, parts.IPv6, options.MapIPv4MappedAddresses);
     }
 
     /// <summary>The memory held by both address families' tables and entries, in bytes.</summary>
-    public long Bytes => _v4.Bytes + _v6.Bytes;
+    public long Bytes => _ipv4Trie.Bytes + _ipv6Trie.Bytes;
 
     // ---- lookups, written once in IPLookupReader -------------------------------------------------------------------
 

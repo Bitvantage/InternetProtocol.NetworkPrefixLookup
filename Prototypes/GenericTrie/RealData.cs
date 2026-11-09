@@ -34,8 +34,8 @@ public static class RealData
     public sealed record Table<TKey>(TKey[] Bits, int[] Lengths, IPNetwork[] Networks, int[] Asns, TKey[] Keys, IPAddress[] Addresses)
         where TKey : struct, IBitKey<TKey>;
 
-    private static readonly Lazy<Table<Bits32>> V4Table = new(() => Load("rv2", 4, s => new Bits32(BinaryPrimitives.ReadUInt32BigEndian(s)), b => IPAddressFrom32(b.Value)));
-    private static readonly Lazy<Table<Bits128>> V6Table = new(() => Load("rv6", 16, s => new Bits128(BinaryPrimitives.ReadUInt128BigEndian(s)), b => IPAddressFrom128(b.Value)));
+    private static readonly Lazy<Table<Bits32>> V4Table = new(() => Load("rv2", 4, bytes => new Bits32(BinaryPrimitives.ReadUInt32BigEndian(bytes)), key => IPAddressFrom32(key.Value)));
+    private static readonly Lazy<Table<Bits128>> V6Table = new(() => Load("rv6", 16, bytes => new Bits128(BinaryPrimitives.ReadUInt128BigEndian(bytes)), key => IPAddressFrom128(key.Value)));
 
     public static Table<Bits32> V4 => V4Table.Value;
     public static Table<Bits128> V6 => V6Table.Value;
@@ -60,12 +60,12 @@ public static class RealData
     private static Table<TKey> Load<TKey>(string kind, int byteCount, Func<ReadOnlySpan<byte>, TKey> fromBytes, Func<TKey, IPAddress> toAddress)
         where TKey : struct, IBitKey<TKey>
     {
-        var sw = Stopwatch.StartNew();
-        var file = System.IO.Directory.GetFiles(Directory, $"routeviews-{kind}-*.pfx2as").OrderBy(f => f).Last();
+        var stopwatch = Stopwatch.StartNew();
+        var file = System.IO.Directory.GetFiles(Directory, $"routeviews-{kind}-*.pfx2as").OrderBy(filePath => filePath).Last();
         var bits = new List<TKey>();
         var lengths = new List<int>();
         var networks = new List<IPNetwork>();
-        var asns = new List<int>();
+        var originAsNumbers = new List<int>();
         Span<byte> bytes = stackalloc byte[byteCount];
 
         foreach (var line in File.ReadLines(file))
@@ -76,11 +76,11 @@ public static class RealData
             address.TryWriteBytes(bytes, out _);
             var key = TKey.Truncate(fromBytes(bytes), length);
             // the origin AS field can be a set such as "64496_64497" or "64496,64497"; keep the first AS
-            var asText = parts[2].Split('_', ',')[0];
+            var originAsText = parts[2].Split('_', ',')[0];
             bits.Add(key);
             lengths.Add(length);
             networks.Add(new IPNetwork(toAddress(key), length));
-            asns.Add(int.TryParse(asText, out var asn) ? asn : 0);
+            originAsNumbers.Add(int.TryParse(originAsText, out var originAsNumber) ? originAsNumber : 0);
         }
 
         // 1,000,000 keys: a random announced prefix, then random bits for the rest of the address
@@ -89,19 +89,19 @@ public static class RealData
         var addresses = new IPAddress[keys.Length];
         var width = byteCount * 8;
         Span<byte> noise = stackalloc byte[byteCount]; // outside the loop: stackalloc in a loop is only freed on return
-        for (var i = 0; i < keys.Length; i++)
+        for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
         {
-            var p = random.Next(bits.Count);
+            var prefixIndex = random.Next(bits.Count);
             random.NextBytes(noise);
             var host = fromBytes(noise);
             // keep the prefix's bits and take the remaining bits from the random value
-            var mask = TKey.MaskFor(lengths[p]);
-            keys[i] = Combine(bits[p], host, mask, width);
-            addresses[i] = toAddress(keys[i]);
+            var mask = TKey.MaskFor(lengths[prefixIndex]);
+            keys[keyIndex] = Combine(bits[prefixIndex], host, mask, width);
+            addresses[keyIndex] = toAddress(keys[keyIndex]);
         }
 
-        Console.Error.WriteLine($"loaded {bits.Count:N0} {kind} prefixes from {Path.GetFileName(file)} in {sw.Elapsed.TotalSeconds:F1} s");
-        return new Table<TKey>(bits.ToArray(), lengths.ToArray(), networks.ToArray(), asns.ToArray(), keys, addresses);
+        Console.Error.WriteLine($"loaded {bits.Count:N0} {kind} prefixes from {Path.GetFileName(file)} in {stopwatch.Elapsed.TotalSeconds:F1} s");
+        return new Table<TKey>(bits.ToArray(), lengths.ToArray(), networks.ToArray(), originAsNumbers.ToArray(), keys, addresses);
     }
 
     // (prefix & mask) | (host & ~mask), done through the key interface: truncate the host to nothing where the mask is set
@@ -110,13 +110,13 @@ public static class RealData
         // IBitKey has no general bitwise operators, so fall back to the concrete types
         if (typeof(TKey) == typeof(Bits32))
         {
-            var p = (Bits32)(object)prefix; var h = (Bits32)(object)host; var m = (Bits32)(object)mask;
-            return (TKey)(object)new Bits32((p.Value & m.Value) | (h.Value & ~m.Value));
+            var prefixBits = (Bits32)(object)prefix; var hostBits = (Bits32)(object)host; var maskBits = (Bits32)(object)mask;
+            return (TKey)(object)new Bits32((prefixBits.Value & maskBits.Value) | (hostBits.Value & ~maskBits.Value));
         }
         if (typeof(TKey) == typeof(Bits128))
         {
-            var p = (Bits128)(object)prefix; var h = (Bits128)(object)host; var m = (Bits128)(object)mask;
-            return (TKey)(object)new Bits128((p.Value & m.Value) | (h.Value & ~m.Value));
+            var prefixBits = (Bits128)(object)prefix; var hostBits = (Bits128)(object)host; var maskBits = (Bits128)(object)mask;
+            return (TKey)(object)new Bits128((prefixBits.Value & maskBits.Value) | (hostBits.Value & ~maskBits.Value));
         }
         throw new NotSupportedException(typeof(TKey).Name);
     }

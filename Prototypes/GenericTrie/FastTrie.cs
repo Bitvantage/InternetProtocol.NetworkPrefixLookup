@@ -73,8 +73,8 @@ public sealed class InlineChildTrie<TKey, TPrefix, TValue> where TKey : struct, 
             return true;
         }
 
-        var common = TKey.CommonPrefixLength(bits, existing.Bits, Math.Min(length, existing.Length));
-        var routing = new Node(TKey.Truncate(bits, common), common);
+        var commonLength = TKey.CommonPrefixLength(bits, existing.Bits, Math.Min(length, existing.Length));
+        var routing = new Node(TKey.Truncate(bits, commonLength), commonLength);
         routing.SetChild(TKey.IsSet(bits, routing.Split), node);
         routing.SetChild(TKey.IsSet(existing.Bits, routing.Split), existing);
         parent.SetChild(slot, routing);
@@ -130,8 +130,10 @@ public sealed class InlineChildTrie<TKey, TPrefix, TValue> where TKey : struct, 
 
         public void SetChild(bool slot, Node child)
         {
-            if (slot) Child1 = child;
-            else Child0 = child;
+            if (slot)
+                Child1 = child;
+            else
+                Child0 = child;
         }
     }
 }
@@ -196,24 +198,24 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
     private CandidateEntry[]? _candidateIndex;
     private TKey _candidateSplit; // selects key bit number _indexBits
 
-    // multi-level index: a root table over the first _mlRootBits bits, and sub-tables of _mlSubBits bits each for blocks
+    // multi-level index: a root table over the first _multiLevelRootBits bits, and sub-tables of _multiLevelSubBits bits each for blocks
     // that still hold many nodes. An entry is (best value index << 32 | target); when bit 31 of the target is set, the
-    // rest of the target is the start of a sub-table in _mlSubs, otherwise it is a node index.
-    private ulong[]? _mlRoot;
-    private ulong[] _mlSubs = Array.Empty<ulong>();
+    // rest of the target is the start of a sub-table in _multiLevelSubTables, otherwise it is a node index.
+    private ulong[]? _multiLevelRoot;
+    private ulong[] _multiLevelSubTables = Array.Empty<ulong>();
 
     // leaf-pushed tables, for frozen use: every entry holds either the final answer (value index + 1, 0 for no match)
     // or, with the top bit set, the start of a child table. A lookup reads only these tables, never the nodes.
-    private uint[]? _lpRoot;
-    private uint[] _lpSubs = Array.Empty<uint>();
-    private int _lpRootBits;
-    private int _lpSubBits;
-    private int _mlRootBits;
-    private int _mlSubBits;
+    private uint[]? _leafPushedRoot;
+    private uint[] _leafPushedSubTables = Array.Empty<uint>();
+    private int _leafPushedRootBits;
+    private int _leafPushedSubBits;
+    private int _multiLevelRootBits;
+    private int _multiLevelSubBits;
     private const uint SubTableFlag = 0x8000_0000;
 
     // compressed leaf-pushed tables, in the style of Poptrie (Asai and Ohara, SIGCOMM 2015), also for frozen use: a direct
-    // root over the first _cpRootBits bits, then nodes that each decide 6 more bits. Instead of 64 entries, a node keeps
+    // root over the first _compressedRootBits bits, then nodes that each decide 6 more bits. Instead of 64 entries, a node keeps
     // one bitmap of the slots that lead to another node and one of the slots where a run of equal answers starts, and a
     // popcount turns a slot number into a position among the node's children or answers. Equal neighbouring answers
     // are stored once, so the tables are far smaller than plain leaf-pushed tables.
@@ -223,13 +225,13 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
         public ulong Children;  // bit s set: slot s leads to a child node
         public ulong Runs;      // bit s set: slot s is an answer that differs from the answer in the previous answer slot
         public int FirstChild;  // index of the child for the lowest child slot; the other children follow it
-        public int FirstAnswer; // index in _cpAnswers of the first run's answer; the other runs' answers follow it
+        public int FirstAnswer; // index in _compressedAnswers of the first run's answer; the other runs' answers follow it
     }
 
-    private uint[]? _cpRoot; // value index + 1 (0 for no match), or SubTableFlag | node index
-    private CompressedNode[] _cpNodes = Array.Empty<CompressedNode>();
-    private int[] _cpAnswers = Array.Empty<int>(); // value index, or -1 for no match
-    private int _cpRootBits;
+    private uint[]? _compressedRoot; // value index + 1 (0 for no match), or SubTableFlag | node index
+    private CompressedNode[] _compressedNodes = Array.Empty<CompressedNode>();
+    private int[] _compressedAnswers = Array.Empty<int>(); // value index, or -1 for no match
+    private int _compressedRootBits;
     private const int CompressedStride = 6;
 
     private const int Root = 1;
@@ -277,17 +279,19 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
 
     private void SetChild(int parent, bool slot, int child)
     {
-        if (slot) _nodes[parent].Child1 = child;
-        else _nodes[parent].Child0 = child;
+        if (slot)
+            _nodes[parent].Child1 = child;
+        else
+            _nodes[parent].Child0 = child;
     }
 
     public bool TryAdd(in TKey key, int length, TPrefix prefix, TValue value)
     {
         _index = null; // the prototype rebuilds the index explicitly after changes
         _candidateIndex = null;
-        _mlRoot = null;
-        _lpRoot = null;
-        _cpRoot = null;
+        _multiLevelRoot = null;
+        _leafPushedRoot = null;
+        _compressedRoot = null;
 
         var bits = TKey.Truncate(key, length);
 
@@ -328,8 +332,8 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
             return true;
         }
 
-        var common = TKey.CommonPrefixLength(bits, _nodes[existing].Bits, Math.Min(length, _lengths[existing]));
-        var routing = NewNode(TKey.Truncate(bits, common), common);
+        var commonLength = TKey.CommonPrefixLength(bits, _nodes[existing].Bits, Math.Min(length, _lengths[existing]));
+        var routing = NewNode(TKey.Truncate(bits, commonLength), commonLength);
         SetChild(routing, TKey.IsSet(bits, _nodes[routing].Split), node);
         SetChild(routing, TKey.IsSet(_nodes[existing].Bits, _nodes[routing].Split), existing);
         SetChild(parent, slot, routing);
@@ -343,52 +347,56 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
     public void Relayout(NodeOrder order)
     {
         var newIndex = new int[_nodeCount];
-        var visit = new int[_nodeCount];
+        var visitOrder = new int[_nodeCount];
         var count = 0;
-        visit[count++] = 0; // the sentinel stays at index 0
+        visitOrder[count++] = 0; // the sentinel stays at index 0
 
         if (order == NodeOrder.BreadthFirst)
         {
-            visit[count++] = Root;
+            visitOrder[count++] = Root;
             for (var head = 0; head < count; head++)
             {
-                ref var n = ref _nodes[visit[head]];
-                if (n.Child0 != 0) visit[count++] = n.Child0;
-                if (n.Child1 != 0) visit[count++] = n.Child1;
+                ref var node = ref _nodes[visitOrder[head]];
+                if (node.Child0 != 0)
+                    visitOrder[count++] = node.Child0;
+                if (node.Child1 != 0)
+                    visitOrder[count++] = node.Child1;
             }
         }
         else
         {
             var stack = new Stack<int>();
             stack.Push(Root);
-            while (stack.TryPop(out var i))
+            while (stack.TryPop(out var nodeIndex))
             {
-                visit[count++] = i;
+                visitOrder[count++] = nodeIndex;
                 // push child 1 first so child 0 is placed right after its parent
-                if (_nodes[i].Child1 != 0) stack.Push(_nodes[i].Child1);
-                if (_nodes[i].Child0 != 0) stack.Push(_nodes[i].Child0);
+                if (_nodes[nodeIndex].Child1 != 0)
+                    stack.Push(_nodes[nodeIndex].Child1);
+                if (_nodes[nodeIndex].Child0 != 0)
+                    stack.Push(_nodes[nodeIndex].Child0);
             }
         }
 
-        for (var i = 0; i < count; i++)
-            newIndex[visit[i]] = i;
+        for (var position = 0; position < count; position++)
+            newIndex[visitOrder[position]] = position;
 
         var nodes = new Node[_nodes.Length];
         var lengths = new int[_lengths.Length];
-        for (var i = 0; i < count; i++)
+        for (var position = 0; position < count; position++)
         {
-            var n = _nodes[visit[i]];
-            n.Child0 = newIndex[n.Child0]; // the sentinel maps to itself, so "none" stays 0
-            n.Child1 = newIndex[n.Child1];
-            nodes[i] = n;
-            lengths[i] = _lengths[visit[i]];
+            var node = _nodes[visitOrder[position]];
+            node.Child0 = newIndex[node.Child0]; // the sentinel maps to itself, so "none" stays 0
+            node.Child1 = newIndex[node.Child1];
+            nodes[position] = node;
+            lengths[position] = _lengths[visitOrder[position]];
         }
 
         _nodes = nodes;
         _lengths = lengths;
         _index = null; // these hold node indexes; the frozen tables hold only value indexes, which do not move
         _candidateIndex = null;
-        _mlRoot = null;
+        _multiLevelRoot = null;
     }
 
     /// <summary>
@@ -403,27 +411,27 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
         for (var top = 0; top < index.Length; top++)
         {
             var key = TKey.FromTopBits(top, bits);
-            var i = Root;
+            var nodeIndex = Root;
             var best = -1;
             while (true)
             {
-                best = SelectBest(_nodes[i].Value, best);
-                if (_lengths[i] >= bits)
+                best = SelectBest(_nodes[nodeIndex].Value, best);
+                if (_lengths[nodeIndex] >= bits)
                     break;
 
-                var next = ChildAt(ref _nodes[i], TKey.IsSet(key, _nodes[i].Split));
+                var next = ChildAt(ref _nodes[nodeIndex], TKey.IsSet(key, _nodes[nodeIndex].Split));
                 if (_lengths[next] > bits || !TKey.MatchesUnderMask(key, _nodes[next].Bits, _nodes[next].Mask))
                     break;
-                i = next;
+                nodeIndex = next;
             }
 
-            // node i matches and is decided by the top bits. Its child slot is decided by key bit _lengths[i]: when that
+            // node nodeIndex matches and is decided by the top bits. Its child slot is decided by key bit _lengths[nodeIndex]: when that
             // bit is one of the indexed bits, both candidates are the same child; when it is the next bit, they differ.
             ref var entry = ref index[top];
             entry.Best = best;
-            if (_lengths[i] < bits)
+            if (_lengths[nodeIndex] < bits)
             {
-                var child = ChildAt(ref _nodes[i], TKey.IsSet(key, _nodes[i].Split));
+                var child = ChildAt(ref _nodes[nodeIndex], TKey.IsSet(key, _nodes[nodeIndex].Split));
                 // a child no longer than the indexed bits is fully decided too; if it did match, the walk above would have
                 // gone into it, so it cannot match and the sentinel stands in for it
                 if (_lengths[child] <= bits)
@@ -433,8 +441,8 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
             }
             else
             {
-                entry.Next0 = _nodes[i].Child0;
-                entry.Next1 = _nodes[i].Child1;
+                entry.Next0 = _nodes[nodeIndex].Child0;
+                entry.Next1 = _nodes[nodeIndex].Child1;
             }
         }
 
@@ -452,50 +460,48 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
     public void BuildIndex(int bits, bool skipFinal = true)
     {
         var index = new ulong[1 << bits];
-        var final = 0;
+        var finalCount = 0;
         for (var top = 0; top < index.Length; top++)
         {
             var key = TKey.FromTopBits(top, bits);
-            var i = Root;
+            var nodeIndex = Root;
             var best = -1;
             while (true)
             {
-                best = _nodes[i].Value >= 0 ? _nodes[i].Value : best;
-                if (_lengths[i] >= bits)
+                best = _nodes[nodeIndex].Value >= 0 ? _nodes[nodeIndex].Value : best;
+                if (_lengths[nodeIndex] >= bits)
                     break; // the next child depends on a bit past the indexed ones
 
-                var next = TKey.IsSet(key, _nodes[i].Split) ? _nodes[i].Child1 : _nodes[i].Child0;
+                var next = TKey.IsSet(key, _nodes[nodeIndex].Split) ? _nodes[nodeIndex].Child1 : _nodes[nodeIndex].Child0;
                 if (next == 0 || _lengths[next] > bits || !TKey.MatchesUnderMask(key, _nodes[next].Bits, _nodes[next].Mask))
                     break;
-                i = next;
+                nodeIndex = next;
             }
 
-            // When nothing below node i can match any key in this block, the answer is already known. Pointing the entry
-            // at the sentinel ends the walk at once without loading node i or its children; the sentinel is always cached.
+            // When nothing below node nodeIndex can match any key in this block, the answer is already known. Pointing the entry
+            // at the sentinel ends the walk at once without loading node nodeIndex or its children; the sentinel is always cached.
             bool isFinal;
-            if (_lengths[i] < bits)
+            if (_lengths[nodeIndex] < bits)
             {
                 // the child slot is decided by the indexed bits; a child no longer than them did not match above
-                var child = ChildAt(ref _nodes[i], TKey.IsSet(key, _nodes[i].Split));
+                var child = ChildAt(ref _nodes[nodeIndex], TKey.IsSet(key, _nodes[nodeIndex].Split));
                 isFinal = child == 0 || _lengths[child] <= bits;
             }
             else
-            {
-                isFinal = _nodes[i].Child0 == 0 && _nodes[i].Child1 == 0;
-            }
+                isFinal = _nodes[nodeIndex].Child0 == 0 && _nodes[nodeIndex].Child1 == 0;
 
             if (isFinal && skipFinal)
             {
-                i = 0;
-                final++;
+                nodeIndex = 0;
+                finalCount++;
             }
 
-            index[top] = (ulong)(uint)best << 32 | (uint)i;
+            index[top] = (ulong)(uint)best << 32 | (uint)nodeIndex;
         }
 
         _indexBits = bits;
         _index = index;
-        FinalEntryFraction = final / (double)index.Length;
+        FinalEntryFraction = finalCount / (double)index.Length;
     }
 
     /// <summary>Shrinks the node, length and entry arrays to exactly what is used, removing the growth headroom.</summary>
@@ -521,7 +527,7 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
     /// </summary>
     public (int SubTables, long Bytes) BuildMultiLevelIndex(int rootBits, int subBits, int threshold, int keyWidth)
     {
-        var subs = new List<ulong>();
+        var subTables = new List<ulong>();
         var root = new ulong[1 << rootBits];
         for (var top = 0; top < root.Length; top++)
         {
@@ -530,65 +536,69 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
             root[top] = MakeEntry(node, best, key, rootBits);
         }
 
-        _mlRootBits = rootBits;
-        _mlSubBits = subBits;
-        _mlSubs = subs.ToArray();
-        _mlRoot = root;
+        _multiLevelRootBits = rootBits;
+        _multiLevelSubBits = subBits;
+        _multiLevelSubTables = subTables.ToArray();
+        _multiLevelRoot = root;
         _index = null;
         _candidateIndex = null;
-        return (subs.Count >> subBits, (root.LongLength + subs.Count) * sizeof(ulong));
+        return (subTables.Count >> subBits, (root.LongLength + subTables.Count) * sizeof(ulong));
 
-        ulong MakeEntry(int node, int best, TKey key, int decided)
+        ulong MakeEntry(int node, int best, TKey key, int decidedBits)
         {
-            if (decided + subBits > keyWidth || !HasMoreNodesBelow(node, key, decided, threshold))
+            if (decidedBits + subBits > keyWidth || !HasMoreNodesBelow(node, key, decidedBits, threshold))
                 return (ulong)(uint)best << 32 | (uint)node;
 
-            var start = subs.Count;
-            subs.AddRange(new ulong[1 << subBits]);
-            for (var w = 0; w < 1 << subBits; w++)
+            var start = subTables.Count;
+            subTables.AddRange(new ulong[1 << subBits]);
+            for (var slot = 0; slot < 1 << subBits; slot++)
             {
-                var subKey = TKey.SetBits(key, decided, subBits, w);
-                var (subNode, subBest) = Descend(node, best, subKey, decided + subBits);
-                subs[start + w] = MakeEntry(subNode, subBest, subKey, decided + subBits);
+                var subKey = TKey.SetBits(key, decidedBits, subBits, slot);
+                var (subNode, subBest) = Descend(node, best, subKey, decidedBits + subBits);
+                subTables[start + slot] = MakeEntry(subNode, subBest, subKey, decidedBits + subBits);
             }
 
             return (ulong)(uint)best << 32 | SubTableFlag | (uint)start;
         }
     }
 
-    // Walks from node i (which matches key and whose best match is best) as far as the first `bits` bits of key decide.
-    private (int Node, int Best) Descend(int i, int best, in TKey key, int bits)
+    // Walks from node nodeIndex (which matches key and whose best match is best) as far as the first `bits` bits of key decide.
+    private (int Node, int Best) Descend(int nodeIndex, int best, in TKey key, int bits)
     {
         while (true)
         {
-            best = SelectBest(_nodes[i].Value, best);
-            if (_lengths[i] >= bits)
-                return (i, best);
+            best = SelectBest(_nodes[nodeIndex].Value, best);
+            if (_lengths[nodeIndex] >= bits)
+                return (nodeIndex, best);
 
-            var next = ChildAt(ref _nodes[i], TKey.IsSet(key, _nodes[i].Split));
+            var next = ChildAt(ref _nodes[nodeIndex], TKey.IsSet(key, _nodes[nodeIndex].Split));
             if (_lengths[next] > bits || !TKey.MatchesUnderMask(key, _nodes[next].Bits, _nodes[next].Mask))
-                return (i, best);
-            i = next;
+                return (nodeIndex, best);
+            nodeIndex = next;
         }
     }
 
-    // True when more than `threshold` nodes below `node` lie in the block of keys that share the first `decided` bits of key.
-    private bool HasMoreNodesBelow(int node, in TKey key, int decided, int threshold)
+    // True when more than `threshold` nodes below `node` lie in the block of keys that share the first `decidedBits` bits of key.
+    private bool HasMoreNodesBelow(int node, in TKey key, int decidedBits, int threshold)
     {
-        var block = TKey.Truncate(key, decided);
-        var mask = TKey.MaskFor(decided);
+        var block = TKey.Truncate(key, decidedBits);
+        var mask = TKey.MaskFor(decidedBits);
         var count = 0;
         var stack = new Stack<int>();
-        if (_nodes[node].Child0 != 0) stack.Push(_nodes[node].Child0);
-        if (_nodes[node].Child1 != 0) stack.Push(_nodes[node].Child1);
-        while (stack.TryPop(out var c))
+        if (_nodes[node].Child0 != 0)
+            stack.Push(_nodes[node].Child0);
+        if (_nodes[node].Child1 != 0)
+            stack.Push(_nodes[node].Child1);
+        while (stack.TryPop(out var descendant))
         {
-            if (!TKey.MatchesUnderMask(_nodes[c].Bits, block, mask))
+            if (!TKey.MatchesUnderMask(_nodes[descendant].Bits, block, mask))
                 continue; // outside the block, and so is everything below it
             if (++count > threshold)
                 return true;
-            if (_nodes[c].Child0 != 0) stack.Push(_nodes[c].Child0);
-            if (_nodes[c].Child1 != 0) stack.Push(_nodes[c].Child1);
+            if (_nodes[descendant].Child0 != 0)
+                stack.Push(_nodes[descendant].Child0);
+            if (_nodes[descendant].Child1 != 0)
+                stack.Push(_nodes[descendant].Child1);
         }
 
         return false;
@@ -602,7 +612,7 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
     /// </summary>
     public (int Tables, long Bytes) BuildLeafPushed(int rootBits, int subBits, int keyWidth)
     {
-        var subs = new List<uint>();
+        var subTables = new List<uint>();
         var root = new uint[1 << rootBits];
         for (var top = 0; top < root.Length; top++)
         {
@@ -611,28 +621,28 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
             root[top] = MakeLeafEntry(node, best, key, rootBits);
         }
 
-        _lpRootBits = rootBits;
-        _lpSubBits = subBits;
-        _lpSubs = subs.ToArray();
-        _lpRoot = root;
-        return (subs.Count >> subBits, (root.LongLength + subs.Count) * sizeof(uint));
+        _leafPushedRootBits = rootBits;
+        _leafPushedSubBits = subBits;
+        _leafPushedSubTables = subTables.ToArray();
+        _leafPushedRoot = root;
+        return (subTables.Count >> subBits, (root.LongLength + subTables.Count) * sizeof(uint));
 
-        uint MakeLeafEntry(int node, int best, TKey key, int decided)
+        uint MakeLeafEntry(int node, int best, TKey key, int decidedBits)
         {
             // nothing more specific inside this block: the answer is final
-            if (decided >= keyWidth || !HasMoreNodesBelow(node, key, decided, 0))
+            if (decidedBits >= keyWidth || !HasMoreNodesBelow(node, key, decidedBits, 0))
                 return (uint)(best + 1);
 
-            var start = subs.Count;
-            subs.AddRange(new uint[1 << subBits]);
-            var stride = Math.Min(subBits, keyWidth - decided);
-            for (var w = 0; w < 1 << subBits; w++)
+            var start = subTables.Count;
+            subTables.AddRange(new uint[1 << subBits]);
+            var stride = Math.Min(subBits, keyWidth - decidedBits);
+            for (var slot = 0; slot < 1 << subBits; slot++)
             {
                 // when the last table is narrower than subBits, slots repeat the narrower table's entries
-                var bits = w >> (subBits - stride);
-                var subKey = TKey.SetBits(key, decided, stride, bits);
-                var (subNode, subBest) = Descend(node, best, subKey, decided + stride);
-                subs[start + w] = MakeLeafEntry(subNode, subBest, subKey, decided + stride);
+                var bits = slot >> (subBits - stride);
+                var subKey = TKey.SetBits(key, decidedBits, stride, bits);
+                var (subNode, subBest) = Descend(node, best, subKey, decidedBits + stride);
+                subTables[start + slot] = MakeLeafEntry(subNode, subBest, subKey, decidedBits + stride);
             }
 
             return SubTableFlag | (uint)start;
@@ -664,39 +674,39 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
             BuildNode(nodes.Count - 1, node, best, key, rootBits);
         }
 
-        _cpRootBits = rootBits;
-        _cpNodes = nodes.ToArray();
-        _cpAnswers = answers.ToArray();
-        _cpRoot = root;
+        _compressedRootBits = rootBits;
+        _compressedNodes = nodes.ToArray();
+        _compressedAnswers = answers.ToArray();
+        _compressedRoot = root;
         return (nodes.Count, root.LongLength * sizeof(uint) + (long)nodes.Count * Unsafe.SizeOf<CompressedNode>() + (long)answers.Count * sizeof(int));
 
-        // fills nodes[at] for the block of keys that share the first `decided` bits of key; trie node `node` is the
+        // fills nodes[compressedIndex] for the block of keys that share the first `decidedBits` bits of key; trie node `node` is the
         // deepest one those bits decide and `best` the best match on the way to it
-        void BuildNode(int at, int node, int best, TKey key, int decided)
+        void BuildNode(int compressedIndex, int node, int best, TKey key, int decidedBits)
         {
-            const int slots = 1 << CompressedStride;
-            var stride = Math.Min(CompressedStride, keyWidth - decided);
-            var subNodes = new int[slots];
-            var subBests = new int[slots];
-            var subKeys = new TKey[slots];
+            const int slotCount = 1 << CompressedStride;
+            var stride = Math.Min(CompressedStride, keyWidth - decidedBits);
+            var subNodes = new int[slotCount];
+            var subBests = new int[slotCount];
+            var subKeys = new TKey[slotCount];
             ulong children = 0, runs = 0;
             var firstAnswer = answers.Count;
             var lastAnswer = 0;
             var anyAnswer = false;
 
-            for (var s = 0; s < slots; s++)
+            for (var slot = 0; slot < slotCount; slot++)
             {
                 // when the last node is narrower than 6 bits, neighbouring slots repeat the same answer
-                var subKey = TKey.SetBits(key, decided, stride, s >> (CompressedStride - stride));
-                var (subNode, subBest) = Descend(node, best, subKey, decided + stride);
-                if (decided + stride < keyWidth && HasMoreNodesBelow(subNode, subKey, decided + stride, 0))
+                var subKey = TKey.SetBits(key, decidedBits, stride, slot >> (CompressedStride - stride));
+                var (subNode, subBest) = Descend(node, best, subKey, decidedBits + stride);
+                if (decidedBits + stride < keyWidth && HasMoreNodesBelow(subNode, subKey, decidedBits + stride, 0))
                 {
-                    children |= 1UL << s;
-                    (subNodes[s], subBests[s], subKeys[s]) = (subNode, subBest, subKey);
+                    children |= 1UL << slot;
+                    (subNodes[slot], subBests[slot], subKeys[slot]) = (subNode, subBest, subKey);
                 }
                 else if (!anyAnswer || subBest != lastAnswer)
                 {
-                    runs |= 1UL << s;
+                    runs |= 1UL << slot;
                     answers.Add(subBest);
                     (lastAnswer, anyAnswer) = (subBest, true);
                 }
@@ -704,14 +714,14 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
 
             // children of one node are contiguous, so reserve their places before building any of them
             var firstChild = nodes.Count;
-            for (var c = 0; c < BitOperations.PopCount(children); c++)
+            for (var childIndex = 0; childIndex < BitOperations.PopCount(children); childIndex++)
                 nodes.Add(default);
-            nodes[at] = new CompressedNode { Children = children, Runs = runs, FirstChild = firstChild, FirstAnswer = firstAnswer };
+            nodes[compressedIndex] = new CompressedNode { Children = children, Runs = runs, FirstChild = firstChild, FirstAnswer = firstAnswer };
 
             var child = firstChild;
-            for (var s = 0; s < slots; s++)
-                if ((children & (1UL << s)) != 0)
-                    BuildNode(child++, subNodes[s], subBests[s], subKeys[s], decided + stride);
+            for (var slot = 0; slot < slotCount; slot++)
+                if ((children & (1UL << slot)) != 0)
+                    BuildNode(child++, subNodes[slot], subBests[slot], subKeys[slot], decidedBits + stride);
         }
     }
 
@@ -721,67 +731,67 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int FindValueIndex(in TKey key)
     {
-        var cpRoot = _cpRoot;
-        if (cpRoot != null)
+        var compressedRoot = _compressedRoot;
+        if (compressedRoot != null)
         {
-            var e = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(cpRoot), TKey.GetTopBits(key, _cpRootBits));
-            if ((e & SubTableFlag) == 0)
-                return (int)e - 1;
+            var rootEntry = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(compressedRoot), TKey.GetTopBits(key, _compressedRootBits));
+            if ((rootEntry & SubTableFlag) == 0)
+                return (int)rootEntry - 1;
 
-            ref var cpNodes = ref MemoryMarshal.GetArrayDataReference(_cpNodes);
-            var at = (int)(e & ~SubTableFlag);
-            var offset = _cpRootBits;
+            ref var compressedNodes = ref MemoryMarshal.GetArrayDataReference(_compressedNodes);
+            var compressedIndex = (int)(rootEntry & ~SubTableFlag);
+            var offset = _compressedRootBits;
             while (true)
             {
-                ref var n = ref Unsafe.Add(ref cpNodes, at);
+                ref var compressedNode = ref Unsafe.Add(ref compressedNodes, compressedIndex);
                 var slot = TKey.GetBits(key, offset, CompressedStride);
                 var upToSlot = ulong.MaxValue >> (63 - slot); // bits 0 to slot
-                if ((n.Children & (1UL << slot)) == 0)
-                    return Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_cpAnswers), n.FirstAnswer + BitOperations.PopCount(n.Runs & upToSlot) - 1);
-                at = n.FirstChild + BitOperations.PopCount(n.Children & upToSlot) - 1;
+                if ((compressedNode.Children & (1UL << slot)) == 0)
+                    return Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_compressedAnswers), compressedNode.FirstAnswer + BitOperations.PopCount(compressedNode.Runs & upToSlot) - 1);
+                compressedIndex = compressedNode.FirstChild + BitOperations.PopCount(compressedNode.Children & upToSlot) - 1;
                 offset += CompressedStride;
             }
         }
 
-        var lpRoot = _lpRoot;
-        if (lpRoot != null)
+        var leafPushedRoot = _leafPushedRoot;
+        if (leafPushedRoot != null)
         {
-            var e = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(lpRoot), TKey.GetTopBits(key, _lpRootBits));
-            var offset = _lpRootBits;
-            ref var subs = ref MemoryMarshal.GetArrayDataReference(_lpSubs);
-            while ((e & SubTableFlag) != 0)
+            var tableEntry = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(leafPushedRoot), TKey.GetTopBits(key, _leafPushedRootBits));
+            var offset = _leafPushedRootBits;
+            ref var subTables = ref MemoryMarshal.GetArrayDataReference(_leafPushedSubTables);
+            while ((tableEntry & SubTableFlag) != 0)
             {
-                e = Unsafe.Add(ref subs, (int)(e & ~SubTableFlag) + TKey.GetBits(key, offset, _lpSubBits));
-                offset += _lpSubBits;
+                tableEntry = Unsafe.Add(ref subTables, (int)(tableEntry & ~SubTableFlag) + TKey.GetBits(key, offset, _leafPushedSubBits));
+                offset += _leafPushedSubBits;
             }
-            return (int)e - 1;
+            return (int)tableEntry - 1;
         }
 
         ref var nodes = ref MemoryMarshal.GetArrayDataReference(_nodes);
 
-        var mlRoot = _mlRoot;
-        if (mlRoot != null)
+        var multiLevelRoot = _multiLevelRoot;
+        if (multiLevelRoot != null)
         {
-            var entry = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(mlRoot), TKey.GetTopBits(key, _mlRootBits));
-            var offset = _mlRootBits;
-            ref var subs = ref MemoryMarshal.GetArrayDataReference(_mlSubs);
+            var entry = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(multiLevelRoot), TKey.GetTopBits(key, _multiLevelRootBits));
+            var offset = _multiLevelRootBits;
+            ref var subTables = ref MemoryMarshal.GetArrayDataReference(_multiLevelSubTables);
             while (((uint)entry & SubTableFlag) != 0)
             {
-                entry = Unsafe.Add(ref subs, (int)((uint)entry & ~SubTableFlag) + TKey.GetBits(key, offset, _mlSubBits));
-                offset += _mlSubBits;
+                entry = Unsafe.Add(ref subTables, (int)((uint)entry & ~SubTableFlag) + TKey.GetBits(key, offset, _multiLevelSubBits));
+                offset += _multiLevelSubBits;
             }
 
-            var at = (int)(uint)entry;
+            var currentNodeIndex = (int)(uint)entry;
             var found = (int)(entry >> 32);
             while (true)
             {
-                ref var n = ref Unsafe.Add(ref nodes, at);
-                found = SelectBest(n.Value, found);
-                var next = ChildAt(ref n, TKey.IsSet(key, n.Split));
-                ref var c = ref Unsafe.Add(ref nodes, next);
-                if (!TKey.MatchesUnderMask(key, c.Bits, c.Mask))
+                ref var node = ref Unsafe.Add(ref nodes, currentNodeIndex);
+                found = SelectBest(node.Value, found);
+                var next = ChildAt(ref node, TKey.IsSet(key, node.Split));
+                ref var child = ref Unsafe.Add(ref nodes, next);
+                if (!TKey.MatchesUnderMask(key, child.Bits, child.Mask))
                     return found;
-                at = next;
+                currentNodeIndex = next;
             }
         }
 
@@ -793,40 +803,40 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
             var next = Unsafe.Add(ref entry.Next0, TKey.IsSet(key, _candidateSplit) ? 1 : 0);
 
             // test-then-descend: one branch per step, and a missing child is the sentinel, which never matches
-            ref var c = ref Unsafe.Add(ref nodes, next);
-            while (TKey.MatchesUnderMask(key, c.Bits, c.Mask))
+            ref var candidate = ref Unsafe.Add(ref nodes, next);
+            while (TKey.MatchesUnderMask(key, candidate.Bits, candidate.Mask))
             {
-                found = SelectBest(c.Value, found);
-                c = ref Unsafe.Add(ref nodes, ChildAt(ref c, TKey.IsSet(key, c.Split)));
+                found = SelectBest(candidate.Value, found);
+                candidate = ref Unsafe.Add(ref nodes, ChildAt(ref candidate, TKey.IsSet(key, candidate.Split)));
             }
 
             return found;
         }
 
-        int i, best;
+        int nodeIndex, best;
         var index = _index;
         if (index != null)
         {
             var entry = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(index), TKey.GetTopBits(key, _indexBits));
-            i = (int)(uint)entry;
+            nodeIndex = (int)(uint)entry;
             best = (int)(entry >> 32);
         }
         else
         {
-            i = Root;
+            nodeIndex = Root;
             best = -1;
         }
 
         // one branch per step: a missing child is the sentinel, which never matches
         while (true)
         {
-            ref var n = ref Unsafe.Add(ref nodes, i);
-            best = SelectBest(n.Value, best);
-            var next = ChildAt(ref n, TKey.IsSet(key, n.Split));
-            ref var c = ref Unsafe.Add(ref nodes, next);
-            if (!TKey.MatchesUnderMask(key, c.Bits, c.Mask))
+            ref var node = ref Unsafe.Add(ref nodes, nodeIndex);
+            best = SelectBest(node.Value, best);
+            var next = ChildAt(ref node, TKey.IsSet(key, node.Split));
+            ref var child = ref Unsafe.Add(ref nodes, next);
+            if (!TKey.MatchesUnderMask(key, child.Bits, child.Mask))
                 break;
-            i = next;
+            nodeIndex = next;
         }
 
         return best;
@@ -852,34 +862,34 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
     /// <summary>Counts the table entries and nodes a lookup reads in leaf-pushed or compressed tables. For measurements only.</summary>
     public int CountTableReads(in TKey key)
     {
-        if (_cpRoot != null)
+        if (_compressedRoot != null)
         {
-            var e = _cpRoot[TKey.GetTopBits(key, _cpRootBits)];
+            var tableEntry = _compressedRoot[TKey.GetTopBits(key, _compressedRootBits)];
             var reads = 1;
-            var offset = _cpRootBits;
-            while ((e & SubTableFlag) != 0)
+            var offset = _compressedRootBits;
+            while ((tableEntry & SubTableFlag) != 0)
             {
-                ref var n = ref _cpNodes[(int)(e & ~SubTableFlag)];
+                ref var compressedNode = ref _compressedNodes[(int)(tableEntry & ~SubTableFlag)];
                 reads++;
                 var slot = TKey.GetBits(key, offset, CompressedStride);
-                if ((n.Children & (1UL << slot)) == 0)
+                if ((compressedNode.Children & (1UL << slot)) == 0)
                     return reads + 1; // the answer array
-                e = SubTableFlag | (uint)(n.FirstChild + BitOperations.PopCount(n.Children & (ulong.MaxValue >> (63 - slot))) - 1);
+                tableEntry = SubTableFlag | (uint)(compressedNode.FirstChild + BitOperations.PopCount(compressedNode.Children & (ulong.MaxValue >> (63 - slot))) - 1);
                 offset += CompressedStride;
             }
 
             return reads;
         }
 
-        if (_lpRoot != null)
+        if (_leafPushedRoot != null)
         {
-            var e = _lpRoot[TKey.GetTopBits(key, _lpRootBits)];
+            var tableEntry = _leafPushedRoot[TKey.GetTopBits(key, _leafPushedRootBits)];
             var reads = 1;
-            var offset = _lpRootBits;
-            while ((e & SubTableFlag) != 0)
+            var offset = _leafPushedRootBits;
+            while ((tableEntry & SubTableFlag) != 0)
             {
-                e = _lpSubs[(int)(e & ~SubTableFlag) + TKey.GetBits(key, offset, _lpSubBits)];
-                offset += _lpSubBits;
+                tableEntry = _leafPushedSubTables[(int)(tableEntry & ~SubTableFlag) + TKey.GetBits(key, offset, _leafPushedSubBits)];
+                offset += _leafPushedSubBits;
                 reads++;
             }
 
@@ -895,29 +905,29 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
     /// <summary>Counts the nodes a lookup visits, including the starting node. For measurements only.</summary>
     public int CountVisited(in TKey key)
     {
-        var i = Root;
+        var nodeIndex = Root;
         if (_index != null)
-            i = (int)(uint)_index[TKey.GetTopBits(key, _indexBits)];
-        if (_mlRoot != null)
+            nodeIndex = (int)(uint)_index[TKey.GetTopBits(key, _indexBits)];
+        if (_multiLevelRoot != null)
         {
-            var entry = _mlRoot[TKey.GetTopBits(key, _mlRootBits)];
-            var offset = _mlRootBits;
+            var entry = _multiLevelRoot[TKey.GetTopBits(key, _multiLevelRootBits)];
+            var offset = _multiLevelRootBits;
             while (((uint)entry & SubTableFlag) != 0)
             {
-                entry = _mlSubs[(int)((uint)entry & ~SubTableFlag) + TKey.GetBits(key, offset, _mlSubBits)];
-                offset += _mlSubBits;
+                entry = _multiLevelSubTables[(int)((uint)entry & ~SubTableFlag) + TKey.GetBits(key, offset, _multiLevelSubBits)];
+                offset += _multiLevelSubBits;
             }
-            i = (int)(uint)entry;
+            nodeIndex = (int)(uint)entry;
         }
 
         var visited = 1;
         while (true)
         {
-            ref var n = ref _nodes[i];
-            var next = ChildAt(ref n, TKey.IsSet(key, n.Split));
+            ref var node = ref _nodes[nodeIndex];
+            var next = ChildAt(ref node, TKey.IsSet(key, node.Split));
             if (!TKey.MatchesUnderMask(key, _nodes[next].Bits, _nodes[next].Mask))
                 return visited;
-            i = next;
+            nodeIndex = next;
             visited++;
         }
     }
@@ -944,45 +954,43 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
         Span<int> laneKey = stackalloc int[lanes];
 
         var nextKey = 0;
-        var active = 0;
+        var activeLanes = 0;
         for (var lane = 0; lane < lanes; lane++)
         {
             if (nextKey < keys.Length)
             {
                 laneKey[lane] = nextKey;
                 StartLane(ref laneNode[lane], ref laneBest[lane], keys[nextKey++], index, indexBits, ref nodes, prefetch);
-                active++;
+                activeLanes++;
             }
             else
-            {
                 laneKey[lane] = -1;
-            }
         }
 
-        while (active > 0)
+        while (activeLanes > 0)
         {
             for (var lane = 0; lane < lanes; lane++)
             {
-                var k = laneKey[lane];
-                if (k < 0)
+                var keyIndex = laneKey[lane];
+                if (keyIndex < 0)
                     continue;
 
-                ref readonly var key = ref keys[k];
-                ref var n = ref Unsafe.Add(ref nodes, laneNode[lane]);
-                var best = SelectBest(n.Value, laneBest[lane]);
-                var next = ChildAt(ref n, TKey.IsSet(key, n.Split));
+                ref readonly var key = ref keys[keyIndex];
+                ref var node = ref Unsafe.Add(ref nodes, laneNode[lane]);
+                var best = SelectBest(node.Value, laneBest[lane]);
+                var next = ChildAt(ref node, TKey.IsSet(key, node.Split));
 
-                ref var c = ref Unsafe.Add(ref nodes, next);
-                if (TKey.MatchesUnderMask(key, c.Bits, c.Mask))
+                ref var child = ref Unsafe.Add(ref nodes, next);
+                if (TKey.MatchesUnderMask(key, child.Bits, child.Mask))
                 {
                     laneNode[lane] = next;
                     laneBest[lane] = best;
                     if (prefetch)
-                        PrefetchChildren(ref c, ref nodes);
+                        PrefetchChildren(ref child, ref nodes);
                     continue;
                 }
 
-                results[k] = best;
+                results[keyIndex] = best;
                 if (nextKey < keys.Length)
                 {
                     laneKey[lane] = nextKey;
@@ -991,7 +999,7 @@ public sealed class PooledTrie<TKey, TPrefix, TValue> where TKey : struct, IBitK
                 else
                 {
                     laneKey[lane] = -1;
-                    active--;
+                    activeLanes--;
                 }
             }
         }

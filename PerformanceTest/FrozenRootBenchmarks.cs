@@ -36,7 +36,7 @@ public class FrozenRootBenchmarks
     [GlobalSetup]
     public void Setup()
     {
-        var lookup = new IPNetworkLookup<string>(RandomTableBenchmarks.CreateNetworks().Take(Prefixes).Select(n => KeyValuePair.Create(n, string.Empty)));
+        var lookup = new IPNetworkLookup<string>(RandomTableBenchmarks.CreateNetworks().Take(Prefixes).Select(network => KeyValuePair.Create(network, string.Empty)));
         _fullRoot = lookup.Freeze(new FrozenBitTrieOptions { Layout = FrozenLayout.LeafPushed, RootBits = 16 });
         _sizedRoot = lookup.Freeze(new FrozenBitTrieOptions { Layout = FrozenLayout.LeafPushed });
         _compressedFullRoot = lookup.Freeze(new FrozenBitTrieOptions { Layout = FrozenLayout.Compressed, RootBits = 18 });
@@ -50,7 +50,8 @@ public class FrozenRootBenchmarks
     {
         var found = 0;
         foreach (var key in keys)
-            if (lookup.TryGetMatchValueIPv4(key, out _)) found++;
+            if (lookup.TryGetMatchValueIPv4(key, out _))
+                found++;
         return found;
     }
 

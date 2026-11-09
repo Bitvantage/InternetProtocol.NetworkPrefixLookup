@@ -43,15 +43,17 @@ public class FrozenTableTests
     private static void Freeze<TKey, TPrefix, TValue>(PooledTrie<TKey, TPrefix, TValue> trie, int rootBits, int subBits, int width)
         where TKey : struct, IBitKey<TKey>
     {
-        if (subBits == 0) trie.BuildCompressed(rootBits, width);
-        else trie.BuildLeafPushed(rootBits, subBits, width);
+        if (subBits == 0)
+            trie.BuildCompressed(rootBits, width);
+        else
+            trie.BuildLeafPushed(rootBits, subBits, width);
     }
 
     private static PooledTrie<TKey, int, int> Build<TKey>(TKey[] prefixes, int[] lengths) where TKey : struct, IBitKey<TKey>
     {
         var trie = new PooledTrie<TKey, int, int>();
-        for (var i = 0; i < prefixes.Length; i++)
-            trie.TryAdd(in prefixes[i], lengths[i], i, i * 7);
+        for (var prefixIndex = 0; prefixIndex < prefixes.Length; prefixIndex++)
+            trie.TryAdd(in prefixes[prefixIndex], lengths[prefixIndex], prefixIndex, prefixIndex * 7);
         trie.Relayout(NodeOrder.DepthFirst);
         return trie;
     }
@@ -60,19 +62,19 @@ public class FrozenTableTests
     private static int[] ReferenceMatches(uint[] prefixes, int[] lengths, uint[] keys)
     {
         var reference = new BitTrie<uint, int, int>();
-        for (var i = 0; i < prefixes.Length; i++)
-            reference.TryAdd(prefixes[i], lengths[i], i, 0);
-        return keys.Select(k => reference.TryGetMatch(k, out var p, out _) ? p : -1).ToArray();
+        for (var prefixIndex = 0; prefixIndex < prefixes.Length; prefixIndex++)
+            reference.TryAdd(prefixes[prefixIndex], lengths[prefixIndex], prefixIndex, 0);
+        return keys.Select(key => reference.TryGetMatch(key, out var prefix, out _) ? prefix : -1).ToArray();
     }
 
     private static void AssertMatches<TKey>(PooledTrie<TKey, int, int> trie, TKey[] keys, int[] expected, string because) where TKey : struct, IBitKey<TKey>
     {
         var mismatches = 0;
-        for (var i = 0; i < keys.Length; i++)
+        for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
         {
-            var found = trie.TryGetMatch(in keys[i], out var prefix, out var value);
+            var found = trie.TryGetMatch(in keys[keyIndex], out var prefix, out var value);
             var actual = found ? prefix : -1;
-            if (actual != expected[i] || (found && value != prefix * 7))
+            if (actual != expected[keyIndex] || (found && value != prefix * 7))
                 mismatches++;
         }
 
@@ -84,7 +86,7 @@ public class FrozenTableTests
     {
         var trie = Build(WidthData.Prefix32, WidthData.PrefixLengths);
         Freeze(trie, rootBits, subBits, 32);
-        AssertMatches(trie, WidthData.Key32, ReferenceMatches(WidthData.PrefixRef, WidthData.PrefixLengths, WidthData.KeyRef), name);
+        AssertMatches(trie, WidthData.Key32, ReferenceMatches(WidthData.PrefixReference, WidthData.PrefixLengths, WidthData.KeyReference), name);
     }
 
     [TestCaseSource(nameof(Shapes))]
@@ -93,7 +95,7 @@ public class FrozenTableTests
         // the IPv4 bits sit at the top of the 128-bit key, so the matches are the same as for 32 bits
         var trie = Build(WidthData.Prefix128, WidthData.PrefixLengths);
         Freeze(trie, rootBits, subBits, 128);
-        AssertMatches(trie, WidthData.Key128, ReferenceMatches(WidthData.PrefixRef, WidthData.PrefixLengths, WidthData.KeyRef), name);
+        AssertMatches(trie, WidthData.Key128, ReferenceMatches(WidthData.PrefixReference, WidthData.PrefixLengths, WidthData.KeyReference), name);
     }
 
     [TestCaseSource(nameof(Shapes))]
@@ -102,18 +104,18 @@ public class FrozenTableTests
         // the default route, host routes, a /31 and prefixes that end exactly on and just off table boundaries
         uint[] prefixes = { 0x00000000, 0x0A000000, 0x0A010000, 0x0A010200, 0x0A010203, 0x0A010204, 0x0A010280, 0x0A0102FF, 0x0A010300, 0x0A010000, 0xFFFFFFFF, 0xC0000000 };
         int[] lengths = { 0, 8, 16, 24, 32, 31, 25, 32, 26, 18, 32, 2 };
-        var keys = Enumerable.Range(0, 1024).Select(i => 0x0A010000u + (uint)i) // 10.1.0.0 to 10.1.3.255
+        var keys = Enumerable.Range(0, 1024).Select(offset => 0x0A010000u + (uint)offset) // 10.1.0.0 to 10.1.3.255
             .Concat(new uint[] { 0, 0x0A020000, 0x0B000000, 0x7FFFFFFF, 0xC0000001, 0xFFFFFFFE, 0xFFFFFFFF })
             .ToArray();
 
         foreach (var withDefault in new[] { true, false })
         {
-            var used = Enumerable.Range(0, prefixes.Length).Where(i => withDefault || lengths[i] != 0).ToArray();
-            var p = used.Select(i => prefixes[i]).ToArray();
-            var l = used.Select(i => lengths[i]).ToArray();
-            var trie = Build(p.Select(b => new Bits32(b)).ToArray(), l);
+            var used = Enumerable.Range(0, prefixes.Length).Where(prefixIndex => withDefault || lengths[prefixIndex] != 0).ToArray();
+            var usedPrefixes = used.Select(prefixIndex => prefixes[prefixIndex]).ToArray();
+            var usedLengths = used.Select(prefixIndex => lengths[prefixIndex]).ToArray();
+            var trie = Build(usedPrefixes.Select(prefixBits => new Bits32(prefixBits)).ToArray(), usedLengths);
             Freeze(trie, rootBits, subBits, 32);
-            AssertMatches(trie, keys.Select(k => new Bits32(k)).ToArray(), ReferenceMatches(p, l, keys), $"{name}, {(withDefault ? "with" : "without")} the default route");
+            AssertMatches(trie, keys.Select(key => new Bits32(key)).ToArray(), ReferenceMatches(usedPrefixes, usedLengths, keys), $"{name}, {(withDefault ? "with" : "without")} the default route");
         }
     }
 
@@ -160,14 +162,14 @@ public class FrozenTableTests
 
         // the node walk was checked against the current library in SnapshotTrieTests and RealDataChecks
         var trie = Build(table.Bits, table.Lengths);
-        var expected = table.Keys.Select(k => trie.GetMatchIndex(in k)).ToArray();
+        var expected = table.Keys.Select(key => trie.GetMatchIndex(in key)).ToArray();
         foreach (var (rootBits, subBits) in new[] { (16, 8), (18, 0) })
         {
             var frozen = Build(table.Bits, table.Lengths);
             Freeze(frozen, rootBits, subBits, width);
             var mismatches = 0;
-            for (var i = 0; i < table.Keys.Length; i++)
-                if (frozen.GetMatchIndex(in table.Keys[i]) != expected[i])
+            for (var keyIndex = 0; keyIndex < table.Keys.Length; keyIndex++)
+                if (frozen.GetMatchIndex(in table.Keys[keyIndex]) != expected[keyIndex])
                     mismatches++;
             Assert.That(mismatches, Is.Zero, subBits == 0 ? $"compressed {rootBits}" : $"leaf-pushed {rootBits}/{subBits}");
         }

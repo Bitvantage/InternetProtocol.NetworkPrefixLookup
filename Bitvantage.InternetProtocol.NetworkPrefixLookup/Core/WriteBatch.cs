@@ -61,7 +61,8 @@ public sealed class WriteBatch : IDisposable
     public void Dispose()
     {
         var owner = _owner;
-        if (owner == null) return;
+        if (owner == null)
+            return;
         owner.CheckBatchThread();
         _owner = null;
         owner.EndBatch(commit: false);

@@ -45,7 +45,7 @@ public class AdapterTests
             Assert.That(form.TryGetMatchValue(IPAddress.Parse("fd99::1"), out value) && value == 108);
             Assert.That(form.TryGetMatchValue(IPAddress.Parse("fe80::1"), out _), Is.False);
             Assert.That(form.TryGetMatch(IPAddress.Parse("10.200.0.1"), out var network, out _) && network.ToString() == "10.128.0.0/9");
-            Assert.That(new IPNetwork2Lookup<int>(form).Select(e => e.Value), Is.EqualTo(form.Select(e => e.Value)), "a copy");
+            Assert.That(new IPNetwork2Lookup<int>(form).Select(entry => entry.Value), Is.EqualTo(form.Select(entry => entry.Value)), "a copy");
         }
 
         Assert.That(lookup.Remove(IPNetwork2.Parse("10.128.0.0/9")));
@@ -62,9 +62,10 @@ public class AdapterTests
         var probes = new List<IPAddress>();
         foreach (var node in reader.FindAll<Dictionary<string, object>>())
         {
-            if (node.PrefixLength < 0) continue;
-            var v4 = node.Start.AddressFamily == AddressFamily.InterNetwork;
-            if (v4)
+            if (node.PrefixLength < 0)
+                continue;
+            var isIPv4 = node.Start.AddressFamily == AddressFamily.InterNetwork;
+            if (isIPv4)
             {
                 var first = IPAddressBits.ToIPv4Bits(node.Start);
                 var last = first | (uint)(0xFFFFFFFFUL >> node.PrefixLength);
@@ -85,7 +86,7 @@ public class AdapterTests
         }
 
         var random = new Random(seed);
-        for (var i = 0; i < 2000; i++)
+        for (var randomProbeIndex = 0; randomProbeIndex < 2000; randomProbeIndex++)
         {
             probes.Add(IPAddressBits.FromIPv4Bits((uint)random.NextInt64(0, 1L << 32)));
             var bytes = new byte[16];
@@ -99,7 +100,8 @@ public class AdapterTests
     // the aliases of the IPv4 networks in MaxMind's IPv6 databases: IPv4-mapped, Teredo and 6to4
     private static bool InAlias(IPAddress address)
     {
-        if (address.AddressFamily != AddressFamily.InterNetworkV6) return false;
+        if (address.AddressFamily != AddressFamily.InterNetworkV6)
+            return false;
         var bits = IPAddressBits.ToIPv6Bits(address);
         return bits >> 32 == 0xFFFF || bits >> 96 == 0x20010000 || bits >> 112 == 0x2002;
     }
@@ -131,7 +133,8 @@ public class AdapterTests
         foreach (var address in probes)
         {
             var expected = Json(reader.Find<Dictionary<string, object>>(address));
-            if (expected != "null") found++;
+            if (expected != "null")
+                found++;
             foreach (var (name, form) in new (string, IReadOnlyIPPrefixLookup<Network, Dictionary<string, object>>)[] { ("full", full), ("full frozen", full.Freeze()), ("lean", lean), ("lean frozen", lean.Freeze()) })
             {
                 if (name.StartsWith("lean") && (IsIPv4Compatible(address) || (InAlias(address) && IPAddressBits.ToIPv6Bits(address) >> 32 != 0xFFFF)))
@@ -146,44 +149,44 @@ public class AdapterTests
         Assert.That(found, Is.GreaterThan(50), "enough probes land in a network");
     }
 
-    // A minimal MaxMind DB: a search tree of 24-bit records, one data record { "id": 1 }, and metadata. records(i) gives
-    // node i's left and right record: a node number, nodeCount for no data, or -1 for the data record.
+    // A minimal MaxMind DB: a search tree of 24-bit records, one data record { "id": 1 }, and metadata. records(nodeIndex) gives
+    // node nodeIndex's left and right record: a node number, nodeCount for no data, or -1 for the data record.
     private static byte[] TinyDatabase(int nodeCount, Func<int, (int Left, int Right)> records, int ipVersion)
     {
         var tree = new byte[nodeCount * 6];
-        for (var i = 0; i < nodeCount; i++)
+        for (var nodeIndex = 0; nodeIndex < nodeCount; nodeIndex++)
         {
-            var (left, right) = records(i);
-            Write24(tree, i * 6, left == -1 ? nodeCount + 16 : left);
-            Write24(tree, i * 6 + 3, right == -1 ? nodeCount + 16 : right);
+            var (left, right) = records(nodeIndex);
+            Write24(tree, nodeIndex * 6, left == -1 ? nodeCount + 16 : left);
+            Write24(tree, nodeIndex * 6 + 3, right == -1 ? nodeCount + 16 : right);
         }
 
         var data = new byte[] { 0xE1, 0x42, (byte)'i', (byte)'d', 0xC1, 0x01 };
-        var meta = new List<byte> { 0xAB, 0xCD, 0xEF };
-        meta.AddRange("MaxMind.com"u8.ToArray());
-        meta.Add(0xE9);
+        var metadata = new List<byte> { 0xAB, 0xCD, 0xEF };
+        metadata.AddRange("MaxMind.com"u8.ToArray());
+        metadata.Add(0xE9);
         void Key(string key)
         {
-            meta.Add((byte)(0x40 | key.Length));
-            meta.AddRange(System.Text.Encoding.ASCII.GetBytes(key));
+            metadata.Add((byte)(0x40 | key.Length));
+            metadata.AddRange(System.Text.Encoding.ASCII.GetBytes(key));
         }
 
-        Key("binary_format_major_version"); meta.AddRange(new byte[] { 0xA1, 2 });
-        Key("binary_format_minor_version"); meta.Add(0xA0);
-        Key("build_epoch"); meta.AddRange(new byte[] { 0x00, 0x02 });
-        Key("database_type"); meta.Add(0x44); meta.AddRange("Test"u8.ToArray());
-        Key("description"); meta.Add(0xE0);
-        Key("ip_version"); meta.AddRange(new byte[] { 0xA1, (byte)ipVersion });
-        Key("languages"); meta.AddRange(new byte[] { 0x00, 0x04 });
-        Key("node_count"); meta.AddRange(new byte[] { 0xC2, (byte)(nodeCount >> 8), (byte)nodeCount });
-        Key("record_size"); meta.AddRange(new byte[] { 0xA1, 24 });
-        return tree.Concat(new byte[16]).Concat(data).Concat(meta).ToArray();
+        Key("binary_format_major_version"); metadata.AddRange(new byte[] { 0xA1, 2 });
+        Key("binary_format_minor_version"); metadata.Add(0xA0);
+        Key("build_epoch"); metadata.AddRange(new byte[] { 0x00, 0x02 });
+        Key("database_type"); metadata.Add(0x44); metadata.AddRange("Test"u8.ToArray());
+        Key("description"); metadata.Add(0xE0);
+        Key("ip_version"); metadata.AddRange(new byte[] { 0xA1, (byte)ipVersion });
+        Key("languages"); metadata.AddRange(new byte[] { 0x00, 0x04 });
+        Key("node_count"); metadata.AddRange(new byte[] { 0xC2, (byte)(nodeCount >> 8), (byte)nodeCount });
+        Key("record_size"); metadata.AddRange(new byte[] { 0xA1, 24 });
+        return tree.Concat(new byte[16]).Concat(data).Concat(metadata).ToArray();
 
-        static void Write24(byte[] bytes, int at, int value)
+        static void Write24(byte[] bytes, int offset, int value)
         {
-            bytes[at] = (byte)(value >> 16);
-            bytes[at + 1] = (byte)(value >> 8);
-            bytes[at + 2] = (byte)value;
+            bytes[offset] = (byte)(value >> 16);
+            bytes[offset + 1] = (byte)(value >> 8);
+            bytes[offset + 2] = (byte)value;
         }
     }
 
@@ -191,7 +194,7 @@ public class AdapterTests
     public void A_record_above_the_IPv4_networks_answers_IPv4_addresses_as_the_reader_does()
     {
         // an IPv6 tree whose only record is ::/64, which holds the whole IPv4 part at ::/96
-        var bytes = TinyDatabase(64, i => (i == 63 ? -1 : i + 1, 64), 6);
+        var bytes = TinyDatabase(64, nodeIndex => (nodeIndex == 63 ? -1 : nodeIndex + 1, 64), 6);
         using var reader = new Reader(new MemoryStream(bytes));
         var lookup = MaxMindDatabase.Load<Dictionary<string, object>>(reader);
         var full = MaxMindDatabase.Load<Dictionary<string, object>>(reader, new MaxMindLoadOptions { IncludeAliasedNetworks = true });
@@ -211,10 +214,10 @@ public class AdapterTests
         var full = MaxMindDatabase.Load<Dictionary<string, object>>(reader, new MaxMindLoadOptions { IncludeAliasedNetworks = true });
         var asGiven = MaxMindDatabase.Load<Dictionary<string, object>>(reader, new MaxMindLoadOptions { IncludeAliasedNetworks = true, LookupOptions = new IPLookupOptions() });
         var lean = MaxMindDatabase.Load<Dictionary<string, object>>(reader);
-        var ipv4 = full.Count(e => e.Prefix.NetworkAddress.AddressFamily == AddressFamily.InterNetwork);
-        Assert.That(ipv4, Is.GreaterThan(0));
-        Assert.That(asGiven.Count - lean.Count, Is.EqualTo(4 * ipv4), "each IPv4 network appears under ::/96 and three aliases");
-        Assert.That(full.Count - lean.Count, Is.EqualTo(3 * ipv4), "a lookup that maps IPv4-mapped addresses refuses the ::ffff:0:0/96 alias");
-        Assert.That(lean.Any(e => InAlias(e.Prefix.NetworkAddress)), Is.False);
+        var ipv4Count = full.Count(entry => entry.Prefix.NetworkAddress.AddressFamily == AddressFamily.InterNetwork);
+        Assert.That(ipv4Count, Is.GreaterThan(0));
+        Assert.That(asGiven.Count - lean.Count, Is.EqualTo(4 * ipv4Count), "each IPv4 network appears under ::/96 and three aliases");
+        Assert.That(full.Count - lean.Count, Is.EqualTo(3 * ipv4Count), "a lookup that maps IPv4-mapped addresses refuses the ::ffff:0:0/96 alias");
+        Assert.That(lean.Any(entry => InAlias(entry.Prefix.NetworkAddress)), Is.False);
     }
 }

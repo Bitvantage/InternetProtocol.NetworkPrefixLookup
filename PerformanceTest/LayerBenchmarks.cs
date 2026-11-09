@@ -41,14 +41,14 @@ public class LayerBenchmarks
         _core = new BitTrie<Bits32, IPNetwork, int>();
         using (var batch = _core.BeginBatch())
         {
-            for (var i = 0; i < table.Networks.Length; i++)
-                _core.TryAdd(new Bits32(IPAddressBits.ToIPv4Bits(table.Networks[i].BaseAddress)), table.Networks[i].PrefixLength, table.Networks[i], table.Asns[i]);
+            for (var networkIndex = 0; networkIndex < table.Networks.Length; networkIndex++)
+                _core.TryAdd(new Bits32(IPAddressBits.ToIPv4Bits(table.Networks[networkIndex].BaseAddress)), table.Networks[networkIndex].PrefixLength, table.Networks[networkIndex], table.Asns[networkIndex]);
             batch.Commit();
         }
 
         _lookup = RouteViews.Build(table);
         _bits = table.IPv4Keys;
-        _keys = _bits.Select(b => new Bits32(b)).ToArray();
+        _keys = _bits.Select(keyBits => new Bits32(keyBits)).ToArray();
     }
 
     [Benchmark(Baseline = true)]

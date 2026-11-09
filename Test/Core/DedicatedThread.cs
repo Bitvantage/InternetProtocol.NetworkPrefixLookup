@@ -46,9 +46,9 @@ public sealed class DedicatedThread : IDisposable
             {
                 result.SetResult(function());
             }
-            catch (Exception e)
+            catch (Exception exception)
             {
-                result.SetException(e);
+                result.SetException(exception);
             }
         });
         return result.Task.GetAwaiter().GetResult();

@@ -37,16 +37,22 @@ public class RealIPv4Lookup
     private static readonly SnapshotTrie<Bits32, IPNetwork, int> Snapshot32 = RealDataChecks.BulkSnapshot(Table, 32, 32);
 
     [Benchmark(Baseline = true), IterationCount(20)]
-    public long CurrentLibrary() { long sum = 0; foreach (var a in Table.Addresses) sum += Current.TryGetMatch(a, out var r) ? r.Prefix.Length + r.Value : -1; return sum; }
+    public long CurrentLibrary()
+    {
+        long sum = 0;
+        foreach (var address in Table.Addresses)
+            sum += Current.TryGetMatch(address, out var match) ? match.Prefix.Length + match.Value : -1;
+        return sum;
+    }
 
     [Benchmark, IterationCount(20)]
-    public long DecidedBaseline_CachedKeyTrie() { long sum = 0; foreach (var a in Table.Addresses) { var k = new Bits32(Optimization.FromAddressProperty(a)); sum += Cached.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long DecidedBaseline_CachedKeyTrie() { long sum = 0; foreach (var address in Table.Addresses) { var key = new Bits32(Optimization.FromAddressProperty(address)); sum += Cached.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark, IterationCount(20)]
-    public long Optimized_MultiLevel_Threshold8() { long sum = 0; foreach (var a in Table.Addresses) { var k = new Bits32(Optimization.FromAddressProperty(a)); sum += Snapshot8.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long Optimized_MultiLevel_Threshold8() { long sum = 0; foreach (var address in Table.Addresses) { var key = new Bits32(Optimization.FromAddressProperty(address)); sum += Snapshot8.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark, IterationCount(20)]
-    public long Optimized_MultiLevel_Threshold32() { long sum = 0; foreach (var a in Table.Addresses) { var k = new Bits32(Optimization.FromAddressProperty(a)); sum += Snapshot32.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long Optimized_MultiLevel_Threshold32() { long sum = 0; foreach (var address in Table.Addresses) { var key = new Bits32(Optimization.FromAddressProperty(address)); sum += Snapshot32.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 }
 
 /// <summary>One million lookups from IPAddress objects against the real RouteViews IPv6 table, 239,603 prefixes.</summary>
@@ -60,16 +66,22 @@ public class RealIPv6Lookup
     private static readonly SnapshotTrie<Bits128, IPNetwork, int> Snapshot32 = RealDataChecks.BulkSnapshot(Table, 128, 32);
 
     [Benchmark(Baseline = true), IterationCount(20)]
-    public long CurrentLibrary() { long sum = 0; foreach (var a in Table.Addresses) sum += Current.TryGetMatch(a, out var r) ? r.Prefix.Length + r.Value : -1; return sum; }
+    public long CurrentLibrary()
+    {
+        long sum = 0;
+        foreach (var address in Table.Addresses)
+            sum += Current.TryGetMatch(address, out var match) ? match.Prefix.Length + match.Value : -1;
+        return sum;
+    }
 
     [Benchmark, IterationCount(20)]
-    public long DecidedBaseline_CachedKeyTrie() { long sum = 0; foreach (var a in Table.Addresses) { var k = new Bits128(IPBits.V6(a)); sum += Cached.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long DecidedBaseline_CachedKeyTrie() { long sum = 0; foreach (var address in Table.Addresses) { var key = new Bits128(IPBits.V6(address)); sum += Cached.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark, IterationCount(20)]
-    public long Optimized_MultiLevel_Threshold8() { long sum = 0; foreach (var a in Table.Addresses) { var k = new Bits128(IPBits.V6(a)); sum += Snapshot8.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long Optimized_MultiLevel_Threshold8() { long sum = 0; foreach (var address in Table.Addresses) { var key = new Bits128(IPBits.V6(address)); sum += Snapshot8.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark, IterationCount(20)]
-    public long Optimized_MultiLevel_Threshold32() { long sum = 0; foreach (var a in Table.Addresses) { var k = new Bits128(IPBits.V6(a)); sum += Snapshot32.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long Optimized_MultiLevel_Threshold32() { long sum = 0; foreach (var address in Table.Addresses) { var key = new Bits128(IPBits.V6(address)); sum += Snapshot32.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 }
 
 /// <summary>
@@ -93,13 +105,28 @@ public class RealFrozenLookup
     private static readonly Lazy<PooledTrie<Bits128, IPNetwork, int>> V6Compressed20 = new(() => RealDataChecks.BuildCompressed(RealData.V6, 20, 128));
 
     private static long Lookups<TKey>(TKey[] keys, SnapshotTrie<TKey, IPNetwork, int> trie) where TKey : struct, IBitKey<TKey>
-    { long sum = 0; for (var i = 0; i < keys.Length; i++) sum += trie.TryGetMatch(in keys[i], out var p, out var v) ? p.PrefixLength + v : -1; return sum; }
+    {
+        long sum = 0;
+        for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
+            sum += trie.TryGetMatch(in keys[keyIndex], out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+        return sum;
+    }
 
     private static long Lookups<TKey>(TKey[] keys, PooledTrie<TKey, IPNetwork, int> trie) where TKey : struct, IBitKey<TKey>
-    { long sum = 0; for (var i = 0; i < keys.Length; i++) sum += trie.TryGetMatch(in keys[i], out var p, out var v) ? p.PrefixLength + v : -1; return sum; }
+    {
+        long sum = 0;
+        for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
+            sum += trie.TryGetMatch(in keys[keyIndex], out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+        return sum;
+    }
 
     private static long IndexOnly<TKey>(TKey[] keys, PooledTrie<TKey, IPNetwork, int> trie) where TKey : struct, IBitKey<TKey>
-    { long sum = 0; for (var i = 0; i < keys.Length; i++) sum += trie.GetMatchIndex(in keys[i]); return sum; }
+    {
+        long sum = 0;
+        for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
+            sum += trie.GetMatchIndex(in keys[keyIndex]);
+        return sum;
+    }
 
     [Benchmark(Baseline = true), IterationCount(20), BenchmarkCategory("IPv4")]
     public long IPv4_ReadWrite_MultiLevel() => Lookups(RealData.V4.Keys, V4Snapshot.Value);
@@ -151,10 +178,16 @@ public class RealFrozenLookup
 [MemoryDiagnoser]
 public class RealBuild
 {
-    private static readonly NetworkPrefix[] V4Prefixes = RealData.V4.Networks.Select(n => new NetworkPrefix(n.BaseAddress, n.PrefixLength)).ToArray();
-    private static readonly NetworkPrefix[] V6Prefixes = RealData.V6.Networks.Select(n => new NetworkPrefix(n.BaseAddress, n.PrefixLength)).ToArray();
+    private static readonly NetworkPrefix[] V4Prefixes = RealData.V4.Networks.Select(network => new NetworkPrefix(network.BaseAddress, network.PrefixLength)).ToArray();
+    private static readonly NetworkPrefix[] V6Prefixes = RealData.V6.Networks.Select(network => new NetworkPrefix(network.BaseAddress, network.PrefixLength)).ToArray();
 
-    private static object Current(NetworkPrefix[] prefixes, int[] asns) { var l = new NetworkPrefixLookup<int>(); for (var i = 0; i < prefixes.Length; i++) l.TryAdd(prefixes[i], asns[i]); return l; }
+    private static object Current(NetworkPrefix[] prefixes, int[] originAsNumbers)
+    {
+        var lookup = new NetworkPrefixLookup<int>();
+        for (var prefixIndex = 0; prefixIndex < prefixes.Length; prefixIndex++)
+            lookup.TryAdd(prefixes[prefixIndex], originAsNumbers[prefixIndex]);
+        return lookup;
+    }
 
     [Benchmark, IterationCount(10), BenchmarkCategory("IPv4")]
     public object IPv4_CurrentLibrary() => Current(V4Prefixes, RealData.V4.Asns);

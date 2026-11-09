@@ -91,8 +91,8 @@ public static class MaxMindDatabase
     {
         ArgumentNullException.ThrowIfNull(reader);
         options ??= new MaxMindLoadOptions();
-        var map = options.LookupOptions?.MapIPv4MappedAddresses ?? true; // as MaxMindNetworkLookup's default
-        var compatible = options.IncludeAliasedNetworks && reader.Metadata.IPVersion == 6;
+        var mapIPv4MappedAddresses = options.LookupOptions?.MapIPv4MappedAddresses ?? true; // as MaxMindNetworkLookup's default
+        var addIPv4CompatibleNetworks = options.IncludeAliasedNetworks && reader.Metadata.IPVersion == 6;
 
         // The networks are collected, then built into the lookup in one pass, which was faster than adding them to a
         // batch one at a time and allocated less; see "Building from a sequence" in Architecture.md.
@@ -113,11 +113,11 @@ public static class MaxMindDatabase
                 return;
             // a lookup that maps IPv4-mapped addresses refuses networks inside ::ffff:0:0/96, and answers those addresses
             // from the IPv4 networks, as the alias would
-            if (map && IsMapped(network))
+            if (mapIPv4MappedAddresses && IsMapped(network))
                 return;
             networks.Add(KeyValuePair.Create(network, data));
             // the same network as the database stores it, so that IPv4-compatible addresses find it
-            if (compatible && network.NetworkAddress.AddressFamily == AddressFamily.InterNetwork)
+            if (addIPv4CompatibleNetworks && network.NetworkAddress.AddressFamily == AddressFamily.InterNetwork)
                 networks.Add(KeyValuePair.Create(new Network(IPAddressBits.FromIPv6Bits(IPAddressBits.ToIPv4Bits(network.NetworkAddress)), network.PrefixLength + 96), data));
         }
     }

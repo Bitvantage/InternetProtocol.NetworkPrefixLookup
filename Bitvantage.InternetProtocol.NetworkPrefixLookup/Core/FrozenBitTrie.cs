@@ -123,23 +123,23 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
 
             // the open chain of prefixes that contain the current one, shortest first
             var chain = new List<int>();
-            var i = 0;
+            var entryIndex = 0;
             foreach (var (key, length, prefix, value) in items)
             {
-                if (i == count)
+                if (entryIndex == count)
                     throw new InvalidOperationException("The trie changed while it was being frozen.");
-                Bits[i] = key;
-                Lengths[i] = (byte)length;
-                Entries[i] = new Entry { Prefix = prefix, Value = value };
+                Bits[entryIndex] = key;
+                Lengths[entryIndex] = (byte)length;
+                Entries[entryIndex] = new Entry { Prefix = prefix, Value = value };
 
                 while (chain.Count > 0 && !TKey.MatchesUnderMask(key, Bits[chain[^1]], TKey.MaskFor(Lengths[chain[^1]])))
                     chain.RemoveAt(chain.Count - 1);
-                Parents[i] = chain.Count > 0 ? chain[^1] : -1;
-                chain.Add(i);
-                i++;
+                Parents[entryIndex] = chain.Count > 0 ? chain[^1] : -1;
+                chain.Add(entryIndex);
+                entryIndex++;
             }
 
-            if (i != count)
+            if (entryIndex != count)
                 throw new InvalidOperationException("The trie changed while it was being frozen.");
         }
     }
@@ -176,8 +176,8 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     {
         ArgumentNullException.ThrowIfNull(options);
         var count = contents.Entries.Length;
-        if (options.Layout is { } given && !Enum.IsDefined(given))
-            throw new ArgumentException($"Unknown layout {given}.", nameof(options));
+        if (options.Layout is { } givenLayout && !Enum.IsDefined(givenLayout))
+            throw new ArgumentException($"Unknown layout {givenLayout}.", nameof(options));
         if (options.RootBits is < 1 or > 24)
             throw new ArgumentOutOfRangeException(nameof(options), options.RootBits, "RootBits ranges from 1 to 24.");
         if (options.TableBits is < 1 or > 16)
@@ -192,8 +192,8 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
         if (options.ValueOnlyLookups)
         {
             _values = new TValue[count];
-            for (var i = 0; i < count; i++)
-                _values[i] = _entries[i].Value;
+            for (var entryIndex = 0; entryIndex < count; entryIndex++)
+                _values[entryIndex] = _entries[entryIndex].Value;
         }
 
         var builder = new Builder(bits, _lengths, _tableBits);
@@ -205,8 +205,8 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
         if (options.Layout != FrozenLayout.Compressed)
         {
             var counting = new Runs(0, count, 0, leafRootBits, bits, _lengths);
-            while (counting.Next(out _, out var lo, out var hi))
-                entries += builder.CountTables(lo, hi, leafRootBits);
+            while (counting.Next(out _, out var runLow, out var runHigh))
+                entries += builder.CountTables(runLow, runHigh, leafRootBits);
             entries <<= _tableBits;
         }
 
@@ -223,20 +223,18 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
         }
 
         var runs = new Runs(0, count, 0, _rootBits, bits, _lengths);
-        while (runs.Next(out var slot, out var lo, out var hi))
+        while (runs.Next(out var slot, out var runLow, out var runHigh))
         {
             var best = (int)_root[slot] - 1;
             if (_compressed)
             {
                 var node = builder.Nodes.Count;
                 builder.Nodes.Add(default);
-                builder.BuildNode(node, lo, hi, best, _rootBits);
+                builder.BuildNode(node, runLow, runHigh, best, _rootBits);
                 _root[slot] = TableFlag | (uint)node;
             }
             else
-            {
-                _root[slot] = TableFlag | (uint)builder.BuildTable(lo, hi, best, _rootBits);
-            }
+                _root[slot] = TableFlag | (uint)builder.BuildTable(runLow, runHigh, best, _rootBits);
         }
 
         if (_compressed)
@@ -263,8 +261,8 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     {
         if (!compressed)
             return count < 32 ? 8 : 16;
-        var log2 = count <= 1 ? 0 : 32 - BitOperations.LeadingZeroCount((uint)(count - 1));
-        return Math.Clamp(log2 + 4, 8, 18);
+        var ceilingLog2 = count <= 1 ? 0 : 32 - BitOperations.LeadingZeroCount((uint)(count - 1));
+        return Math.Clamp(ceilingLog2 + 4, 8, 18);
     }
 
     /// <summary>The options the trie was built with.</summary>
@@ -291,39 +289,39 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private int Find(in TKey key)
     {
-        var e = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_root), TKey.GetTopBits(key, _rootBits));
-        if ((e & TableFlag) == 0)
-            return (int)e - 1;
-        return _compressed ? FindCompressed(in key, e) : FindLeafPushed(in key, e);
+        var tableEntry = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_root), TKey.GetTopBits(key, _rootBits));
+        if ((tableEntry & TableFlag) == 0)
+            return (int)tableEntry - 1;
+        return _compressed ? FindCompressed(in key, tableEntry) : FindLeafPushed(in key, tableEntry);
     }
 
-    private int FindLeafPushed(in TKey key, uint e)
+    private int FindLeafPushed(in TKey key, uint tableEntry)
     {
         ref var tables = ref MemoryMarshal.GetArrayDataReference(_tables);
         var offset = _rootBits;
         var tableBits = _tableBits;
         do
         {
-            e = Unsafe.Add(ref tables, (int)(e & ~TableFlag) + TKey.GetBits(key, offset, tableBits));
+            tableEntry = Unsafe.Add(ref tables, (int)(tableEntry & ~TableFlag) + TKey.GetBits(key, offset, tableBits));
             offset += tableBits;
-        } while ((e & TableFlag) != 0);
+        } while ((tableEntry & TableFlag) != 0);
 
-        return (int)e - 1;
+        return (int)tableEntry - 1;
     }
 
-    private int FindCompressed(in TKey key, uint e)
+    private int FindCompressed(in TKey key, uint tableEntry)
     {
         ref var nodes = ref MemoryMarshal.GetArrayDataReference(_nodes);
-        var at = (int)(e & ~TableFlag);
+        var nodeIndex = (int)(tableEntry & ~TableFlag);
         var offset = _rootBits;
         while (true)
         {
-            ref var n = ref Unsafe.Add(ref nodes, at);
+            ref var node = ref Unsafe.Add(ref nodes, nodeIndex);
             var slot = TKey.GetBits(key, offset, Stride);
             var upToSlot = ulong.MaxValue >> (63 - slot); // bits 0 to slot
-            if ((n.Children & (1UL << slot)) == 0)
-                return Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_answers), n.FirstAnswer + BitOperations.PopCount(n.Runs & upToSlot) - 1);
-            at = n.FirstChild + BitOperations.PopCount(n.Children & upToSlot) - 1;
+            if ((node.Children & (1UL << slot)) == 0)
+                return Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_answers), node.FirstAnswer + BitOperations.PopCount(node.Runs & upToSlot) - 1);
+            nodeIndex = node.FirstChild + BitOperations.PopCount(node.Children & upToSlot) - 1;
             offset += Stride;
         }
     }
@@ -332,31 +330,31 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     // contains its first address, so it lies on the chain from that address's longest match
     private int FindForPrefix(in TKey bits, int length)
     {
-        var i = Find(TKey.Truncate(bits, length));
-        while (i >= 0 && _lengths[i] > length)
-            i = _parents[i];
-        return i;
+        var entryIndex = Find(TKey.Truncate(bits, length));
+        while (entryIndex >= 0 && _lengths[entryIndex] > length)
+            entryIndex = _parents[entryIndex];
+        return entryIndex;
     }
 
     private int FindExact(in TKey bits, int length)
     {
-        var i = FindForPrefix(in bits, length);
-        return i >= 0 && _lengths[i] == length ? i : -1;
+        var entryIndex = FindForPrefix(in bits, length);
+        return entryIndex >= 0 && _lengths[entryIndex] == length ? entryIndex : -1;
     }
 
     /// <inheritdoc />
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetMatch(in TKey key, [MaybeNullWhen(false)] out TPrefix prefix, [MaybeNullWhen(false)] out TValue value)
     {
-        var i = Find(in key);
-        if (i < 0)
+        var entryIndex = Find(in key);
+        if (entryIndex < 0)
         {
             prefix = default!;
             value = default!;
             return false;
         }
 
-        ref var entry = ref _entries[i];
+        ref var entry = ref _entries[entryIndex];
         prefix = entry.Prefix;
         value = entry.Value;
         return true;
@@ -370,14 +368,14 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetMatchValue(in TKey key, [MaybeNullWhen(false)] out TValue value)
     {
-        var i = Find(in key);
-        if (i < 0)
+        var entryIndex = Find(in key);
+        if (entryIndex < 0)
         {
             value = default!;
             return false;
         }
 
-        value = _values != null ? _values[i] : _entries[i].Value;
+        value = _values != null ? _values[entryIndex] : _entries[entryIndex].Value;
         return true;
     }
 
@@ -385,15 +383,15 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     public bool TryGetMatch(in TKey bits, int length, [MaybeNullWhen(false)] out TPrefix prefix, [MaybeNullWhen(false)] out TValue value)
     {
         CheckLength(length);
-        var i = FindForPrefix(in bits, length);
-        if (i < 0)
+        var entryIndex = FindForPrefix(in bits, length);
+        if (entryIndex < 0)
         {
             prefix = default!;
             value = default!;
             return false;
         }
 
-        ref var entry = ref _entries[i];
+        ref var entry = ref _entries[entryIndex];
         prefix = entry.Prefix;
         value = entry.Value;
         return true;
@@ -403,14 +401,14 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     public bool TryGetValue(in TKey bits, int length, [MaybeNullWhen(false)] out TValue value)
     {
         CheckLength(length);
-        var i = FindExact(in bits, length);
-        if (i < 0)
+        var entryIndex = FindExact(in bits, length);
+        if (entryIndex < 0)
         {
             value = default!;
             return false;
         }
 
-        value = _entries[i].Value;
+        value = _entries[entryIndex].Value;
         return true;
     }
 
@@ -418,15 +416,15 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     public bool TryGetValue(in TKey bits, int length, [MaybeNullWhen(false)] out TPrefix prefix, [MaybeNullWhen(false)] out TValue value)
     {
         CheckLength(length);
-        var i = FindExact(in bits, length);
-        if (i < 0)
+        var entryIndex = FindExact(in bits, length);
+        if (entryIndex < 0)
         {
             prefix = default!;
             value = default!;
             return false;
         }
 
-        ref var entry = ref _entries[i];
+        ref var entry = ref _entries[entryIndex];
         prefix = entry.Prefix;
         value = entry.Value;
         return true;
@@ -459,23 +457,23 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
         return WriteMatches(FindForPrefix(in bits, length), destination);
     }
 
-    // the entry i and the stored prefixes that contain it, longest first
-    private List<PrefixEntry<TPrefix, TValue>> MatchList(int i)
+    // the entry entryIndex and the stored prefixes that contain it, longest first
+    private List<PrefixEntry<TPrefix, TValue>> MatchList(int entryIndex)
     {
         var results = new List<PrefixEntry<TPrefix, TValue>>();
-        for (; i >= 0; i = _parents[i])
-            results.Add(new PrefixEntry<TPrefix, TValue>(_entries[i].Prefix, _entries[i].Value));
+        for (; entryIndex >= 0; entryIndex = _parents[entryIndex])
+            results.Add(new PrefixEntry<TPrefix, TValue>(_entries[entryIndex].Prefix, _entries[entryIndex].Value));
         return results;
     }
 
-    private int WriteMatches(int i, Span<PrefixEntry<TPrefix, TValue>> destination)
+    private int WriteMatches(int entryIndex, Span<PrefixEntry<TPrefix, TValue>> destination)
     {
         var count = 0;
-        for (; i >= 0; i = _parents[i])
+        for (; entryIndex >= 0; entryIndex = _parents[entryIndex])
         {
             if (count == destination.Length)
                 throw new ArgumentException("The destination is too small for the matches.", nameof(destination));
-            destination[count++] = new PrefixEntry<TPrefix, TValue>(_entries[i].Prefix, _entries[i].Value);
+            destination[count++] = new PrefixEntry<TPrefix, TValue>(_entries[entryIndex].Prefix, _entries[entryIndex].Value);
         }
 
         return count;
@@ -491,8 +489,8 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
         // that, a prefix inside it starts at a later address, and is the first entry at or after it.
         if (Find(in first) >= 0)
             return true;
-        var i = LowerBound(in first, length);
-        return i < _keys.Length && IsInside(i, in first, TKey.MaskFor(length), length);
+        var entryIndex = LowerBound(in first, length);
+        return entryIndex < _keys.Length && IsInside(entryIndex, in first, TKey.MaskFor(length), length);
     }
 
     /// <inheritdoc />
@@ -505,8 +503,8 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     private IEnumerable<PrefixEntry<TPrefix, TValue>> Subnets(TKey bits, int length)
     {
         var mask = TKey.MaskFor(length);
-        for (var i = LowerBound(in bits, length); i < _keys.Length && IsInside(i, in bits, in mask, length); i++)
-            yield return new PrefixEntry<TPrefix, TValue>(_entries[i].Prefix, _entries[i].Value);
+        for (var entryIndex = LowerBound(in bits, length); entryIndex < _keys.Length && IsInside(entryIndex, in bits, in mask, length); entryIndex++)
+            yield return new PrefixEntry<TPrefix, TValue>(_entries[entryIndex].Prefix, _entries[entryIndex].Value);
     }
 
     // The first entry at or after the prefix (bits, length) in address order, where bits are truncated to length; the
@@ -514,23 +512,23 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     // address are shorter, so they come before.
     private int LowerBound(in TKey bits, int length)
     {
-        var lo = 0;
-        var hi = _keys.Length;
-        while (lo < hi)
+        var low = 0;
+        var high = _keys.Length;
+        while (low < high)
         {
-            var mid = (int)((uint)(lo + hi) >> 1);
-            var order = TKey.Compare(in _keys[mid], in bits);
-            if (order < 0 || (order == 0 && _lengths[mid] < length))
-                lo = mid + 1;
+            var middle = (int)((uint)(low + high) >> 1);
+            var order = TKey.Compare(in _keys[middle], in bits);
+            if (order < 0 || (order == 0 && _lengths[middle] < length))
+                low = middle + 1;
             else
-                hi = mid;
+                high = middle;
         }
 
-        return lo;
+        return low;
     }
 
-    // true when entry i lies inside the prefix (bits, length), whose mask is mask
-    private bool IsInside(int i, in TKey bits, in TKey mask, int length) => _lengths[i] >= length && TKey.MatchesUnderMask(in _keys[i], in bits, in mask);
+    // true when entry entryIndex lies inside the prefix (bits, length), whose mask is mask
+    private bool IsInside(int entryIndex, in TKey bits, in TKey mask, int length) => _lengths[entryIndex] >= length && TKey.MatchesUnderMask(in _keys[entryIndex], in bits, in mask);
 
     /// <summary>Returns the stored prefixes in address order, a shorter prefix before a longer one at the same address.</summary>
     public IEnumerator<PrefixEntry<TPrefix, TValue>> GetEnumerator()
@@ -549,27 +547,28 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
 
     // ---- building --------------------------------------------------------------------------------------------------
 
-    // The runs of entries in [lo, hi) longer than decided + bits, grouped by the slot their next `bits` bits select. The
+    // The runs of entries in [low, high) longer than decided + bits, grouped by the slot their next `bits` bits select. The
     // entries come in address order, so the entries below one slot are contiguous: a shorter prefix that starts in a
     // slot's block covers the whole block, and so comes before the longer ones.
-    private struct Runs(int lo, int hi, int decided, int bits, TKey[] keys, byte[] lengths)
+    private struct Runs(int low, int high, int decided, int bits, TKey[] keys, byte[] lengths)
     {
-        private int _i = lo;
+        private int _entryIndex = low;
 
-        public bool Next(out int slot, out int runLo, out int runHi)
+        public bool Next(out int slot, out int runLow, out int runHigh)
         {
             var end = decided + bits;
-            while (_i < hi && lengths[_i] <= end) _i++;
-            if (_i == hi)
+            while (_entryIndex < high && lengths[_entryIndex] <= end)
+                _entryIndex++;
+            if (_entryIndex == high)
             {
-                slot = runLo = runHi = 0;
+                slot = runLow = runHigh = 0;
                 return false;
             }
 
-            slot = TKey.GetBits(keys[_i], decided, bits);
-            runLo = _i;
-            for (_i++; _i < hi && lengths[_i] > end && TKey.GetBits(keys[_i], decided, bits) == slot; _i++) { }
-            runHi = _i;
+            slot = TKey.GetBits(keys[_entryIndex], decided, bits);
+            runLow = _entryIndex;
+            for (_entryIndex++; _entryIndex < high && lengths[_entryIndex] > end && TKey.GetBits(keys[_entryIndex], decided, bits) == slot; _entryIndex++) { }
+            runHigh = _entryIndex;
             return true;
         }
     }
@@ -582,36 +581,37 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
         public readonly List<int> Answers = new();
 
         // Writes the best match for each of the 2^bits slots of the block of keys that share the first `decided` bits:
-        // entry index + 1, or 0, starting from what the slots already hold. Only the entries in [lo, hi) that end within
+        // entry index + 1, or 0, starting from what the slots already hold. Only the entries in [low, high) that end within
         // the slots' bits count; an entry of length L covers 2^(decided + bits - L) slots. When decided + bits passes the
         // key width, lookups read zeros for the missing bits, which this agrees with. A later entry that overlaps an
         // earlier one lies inside it, because containing prefixes come first, so it wins.
-        public void FillAnswers(int lo, int hi, int decided, int bits, Span<uint> slots)
+        public void FillAnswers(int low, int high, int decided, int bits, Span<uint> slots)
         {
             var end = decided + bits;
-            for (var i = lo; i < hi; i++)
+            for (var entryIndex = low; entryIndex < high; entryIndex++)
             {
-                int length = lengths[i];
-                if (length > end) continue;
-                var first = length == decided ? 0 : TKey.GetBits(keys[i], decided, length - decided) << (end - length);
-                slots.Slice(first, 1 << (end - length)).Fill((uint)(i + 1));
+                int length = lengths[entryIndex];
+                if (length > end)
+                    continue;
+                var first = length == decided ? 0 : TKey.GetBits(keys[entryIndex], decided, length - decided) << (end - length);
+                slots.Slice(first, 1 << (end - length)).Fill((uint)(entryIndex + 1));
             }
         }
 
-        // a leaf-pushed table for the entries [lo, hi) inside the block of keys that share the first `decided` bits;
+        // a leaf-pushed table for the entries [low, high) inside the block of keys that share the first `decided` bits;
         // returns its start
-        public int BuildTable(int lo, int hi, int best, int decided)
+        public int BuildTable(int low, int high, int best, int decided)
         {
             var start = _nextTable;
             _nextTable += 1 << tableBits;
             var slots = Tables.AsSpan(start, 1 << tableBits);
             slots.Fill((uint)(best + 1));
-            FillAnswers(lo, hi, decided, tableBits, slots);
+            FillAnswers(low, high, decided, tableBits, slots);
 
-            var runs = new Runs(lo, hi, decided, tableBits, keys, lengths);
-            while (runs.Next(out var slot, out var runLo, out var runHi))
+            var runs = new Runs(low, high, decided, tableBits, keys, lengths);
+            while (runs.Next(out var slot, out var runLow, out var runHigh))
             {
-                var child = BuildTable(runLo, runHi, (int)Tables[start + slot] - 1, decided + tableBits);
+                var child = BuildTable(runLow, runHigh, (int)Tables[start + slot] - 1, decided + tableBits);
                 Tables[start + slot] = TableFlag | (uint)child;
             }
 
@@ -619,55 +619,56 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
         }
 
         // the number of leaf-pushed tables BuildTable makes for the same arguments
-        public long CountTables(int lo, int hi, int decided)
+        public long CountTables(int low, int high, int decided)
         {
             long count = 1;
-            var runs = new Runs(lo, hi, decided, tableBits, keys, lengths);
-            while (runs.Next(out _, out var runLo, out var runHi))
-                count += CountTables(runLo, runHi, decided + tableBits);
+            var runs = new Runs(low, high, decided, tableBits, keys, lengths);
+            while (runs.Next(out _, out var runLow, out var runHigh))
+                count += CountTables(runLow, runHigh, decided + tableBits);
             return count;
         }
 
-        // fills Nodes[at] for the entries [lo, hi) inside the block of keys that share the first `decided` bits
-        public void BuildNode(int at, int lo, int hi, int best, int decided)
+        // fills Nodes[nodeIndex] for the entries [low, high) inside the block of keys that share the first `decided` bits
+        public void BuildNode(int nodeIndex, int low, int high, int best, int decided)
         {
             const int slotCount = 1 << Stride;
             Span<uint> slots = stackalloc uint[slotCount];
-            Span<int> runLo = stackalloc int[slotCount];
-            Span<int> runHi = stackalloc int[slotCount];
+            Span<int> runLows = stackalloc int[slotCount];
+            Span<int> runHighs = stackalloc int[slotCount];
             slots.Fill((uint)(best + 1));
-            FillAnswers(lo, hi, decided, Stride, slots);
+            FillAnswers(low, high, decided, Stride, slots);
 
             ulong children = 0;
-            var runs = new Runs(lo, hi, decided, Stride, keys, lengths);
-            while (runs.Next(out var slot, out var l, out var h))
+            var runs = new Runs(low, high, decided, Stride, keys, lengths);
+            while (runs.Next(out var slot, out var runLow, out var runHigh))
             {
                 children |= 1UL << slot;
-                runLo[slot] = l;
-                runHi[slot] = h;
+                runLows[slot] = runLow;
+                runHighs[slot] = runHigh;
             }
 
             // one answer per run of equal answers, skipping the child slots
             ulong runBits = 0;
             var firstAnswer = Answers.Count;
             var last = uint.MaxValue;
-            for (var s = 0; s < slotCount; s++)
+            for (var slotIndex = 0; slotIndex < slotCount; slotIndex++)
             {
-                if ((children & (1UL << s)) != 0 || slots[s] == last) continue;
-                runBits |= 1UL << s;
-                Answers.Add((int)slots[s] - 1);
-                last = slots[s];
+                if ((children & (1UL << slotIndex)) != 0 || slots[slotIndex] == last)
+                    continue;
+                runBits |= 1UL << slotIndex;
+                Answers.Add((int)slots[slotIndex] - 1);
+                last = slots[slotIndex];
             }
 
             // children of one node are contiguous, so reserve their places before building any of them
             var firstChild = Nodes.Count;
             CollectionsMarshal.SetCount(Nodes, firstChild + BitOperations.PopCount(children));
-            Nodes[at] = new CompressedNode { Children = children, Runs = runBits, FirstChild = firstChild, FirstAnswer = firstAnswer };
+            Nodes[nodeIndex] = new CompressedNode { Children = children, Runs = runBits, FirstChild = firstChild, FirstAnswer = firstAnswer };
 
             var child = firstChild;
-            for (var s = 0; s < slotCount; s++)
-                if ((children & (1UL << s)) != 0)
-                    BuildNode(child++, runLo[s], runHi[s], (int)slots[s] - 1, decided + Stride);
+            for (var slotIndex = 0; slotIndex < slotCount; slotIndex++)
+                if ((children & (1UL << slotIndex)) != 0)
+                    BuildNode(child++, runLows[slotIndex], runHighs[slotIndex], (int)slots[slotIndex] - 1, decided + Stride);
         }
     }
 }

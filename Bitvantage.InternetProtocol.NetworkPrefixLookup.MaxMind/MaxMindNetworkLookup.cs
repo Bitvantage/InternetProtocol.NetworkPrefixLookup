@@ -48,11 +48,11 @@ public readonly struct MaxMindNetworkAdapter : IIPPrefixAdapter<Network>
 public class MaxMindNetworkLookup<TValue> : IPPrefixLookup<Network, MaxMindNetworkAdapter, TValue>
 {
     // MaxMind's IPv6 databases answer IPv4-mapped addresses from the IPv4 networks, so these lookups map them by default
-    private static readonly IPLookupOptions MapMapped = new() { MapIPv4MappedAddresses = true };
+    private static readonly IPLookupOptions DefaultOptions = new() { MapIPv4MappedAddresses = true };
 
     /// <summary>Creates an empty lookup.</summary>
     /// <param name="options">Lookup options; by default IPv4-mapped IPv6 addresses are looked up as IPv4, as MaxMind's reader does.</param>
-    public MaxMindNetworkLookup(IPLookupOptions? options = null) : base(options ?? MapMapped)
+    public MaxMindNetworkLookup(IPLookupOptions? options = null) : base(options ?? DefaultOptions)
     {
     }
 
@@ -60,7 +60,7 @@ public class MaxMindNetworkLookup<TValue> : IPPrefixLookup<Network, MaxMindNetwo
     /// <param name="items">The prefixes and their values.</param>
     /// <param name="options">Lookup options; by default IPv4-mapped IPv6 addresses are looked up as IPv4, as MaxMind's reader does.</param>
     /// <exception cref="ArgumentException">A prefix appears more than once.</exception>
-    public MaxMindNetworkLookup(IEnumerable<KeyValuePair<Network, TValue>> items, IPLookupOptions? options = null) : base(items, options ?? MapMapped)
+    public MaxMindNetworkLookup(IEnumerable<KeyValuePair<Network, TValue>> items, IPLookupOptions? options = null) : base(items, options ?? DefaultOptions)
     {
     }
 
@@ -68,7 +68,7 @@ public class MaxMindNetworkLookup<TValue> : IPPrefixLookup<Network, MaxMindNetwo
     /// <param name="items">The prefixes and their values.</param>
     /// <param name="options">Lookup options; by default IPv4-mapped IPv6 addresses are looked up as IPv4, as MaxMind's reader does.</param>
     /// <exception cref="ArgumentException">A prefixe appears more than once.</exception>
-    public MaxMindNetworkLookup(IEnumerable<PrefixEntry<Network, TValue>> items, IPLookupOptions? options = null) : base(items, options ?? MapMapped)
+    public MaxMindNetworkLookup(IEnumerable<PrefixEntry<Network, TValue>> items, IPLookupOptions? options = null) : base(items, options ?? DefaultOptions)
     {
     }
 
@@ -82,9 +82,9 @@ public class MaxMindNetworkLookup<TValue> : IPPrefixLookup<Network, MaxMindNetwo
     public new FrozenMaxMindNetworkLookup<TValue> Freeze(FrozenBitTrieOptions? options = null) => new(this, options, options);
 
     /// <summary>Builds a read-only copy with a different layout for each address family. See <see cref="Freeze(FrozenBitTrieOptions?)" />.</summary>
-    /// <param name="ipv4">The layout of the IPv4 tables.</param>
-    /// <param name="ipv6">The layout of the IPv6 tables.</param>
-    public new FrozenMaxMindNetworkLookup<TValue> Freeze(FrozenBitTrieOptions ipv4, FrozenBitTrieOptions ipv6) => new(this, ipv4, ipv6);
+    /// <param name="ipv4Options">The layout of the IPv4 tables.</param>
+    /// <param name="ipv6Options">The layout of the IPv6 tables.</param>
+    public new FrozenMaxMindNetworkLookup<TValue> Freeze(FrozenBitTrieOptions ipv4Options, FrozenBitTrieOptions ipv6Options) => new(this, ipv4Options, ipv6Options);
 }
 
 /// <summary>A read-only set of <see cref="Network" /> prefixes, built by <see cref="MaxMindNetworkLookup{TValue}.Freeze(FrozenBitTrieOptions?)" />.</summary>
@@ -93,9 +93,9 @@ public class FrozenMaxMindNetworkLookup<TValue> : FrozenIPPrefixLookup<Network, 
 {
     /// <summary>Freezes a read-write lookup.</summary>
     /// <param name="source">The lookup to copy.</param>
-    /// <param name="ipv4">The layout of the IPv4 tables, or null for the default.</param>
-    /// <param name="ipv6">The layout of the IPv6 tables, or null for the default.</param>
-    protected internal FrozenMaxMindNetworkLookup(MaxMindNetworkLookup<TValue> source, FrozenBitTrieOptions? ipv4, FrozenBitTrieOptions? ipv6) : base(source, ipv4, ipv6)
+    /// <param name="ipv4Options">The layout of the IPv4 tables, or null for the default.</param>
+    /// <param name="ipv6Options">The layout of the IPv6 tables, or null for the default.</param>
+    protected internal FrozenMaxMindNetworkLookup(MaxMindNetworkLookup<TValue> source, FrozenBitTrieOptions? ipv4Options, FrozenBitTrieOptions? ipv6Options) : base(source, ipv4Options, ipv6Options)
     {
     }
 }

@@ -34,9 +34,12 @@ public static class BartCoreChecks
     public static BartTrie<TKey, IPNetwork, int> BuildBart<TKey>(RealData.Table<TKey> table, int width, bool bulk = true) where TKey : struct, IBitKey<TKey>
     {
         var trie = new BartTrie<TKey, IPNetwork, int>(width);
-        if (bulk) trie.BeginBulkLoad();
-        for (var i = 0; i < table.Bits.Length; i++) trie.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-        if (bulk) trie.EndBulkLoad();
+        if (bulk)
+            trie.BeginBulkLoad();
+        for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+            trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+        if (bulk)
+            trie.EndBulkLoad();
         return trie;
     }
 
@@ -59,8 +62,10 @@ public static class BartCoreChecks
         var random = new Random(5);
         var chosen = Enumerable.Range(0, table.Bits.Length).Where(_ => random.Next(2) == 0).OrderBy(_ => random.Next()).ToArray();
         var before = Heap();
-        foreach (var i in chosen) trie.TryRemove(in table.Bits[i], table.Lengths[i]);
-        foreach (var i in chosen.OrderBy(_ => random.Next())) trie.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
+        foreach (var prefixIndex in chosen)
+            trie.TryRemove(in table.Bits[prefixIndex], table.Lengths[prefixIndex]);
+        foreach (var prefixIndex in chosen.OrderBy(_ => random.Next()))
+            trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
         var growth = Heap() - before;
         GC.KeepAlive(trie);
 
@@ -94,30 +99,32 @@ public static class BartCoreChecks
         const int changes = 1_000_000;
         var table = RealData.V4;
         var trie = BuildBart(table, 32);
-        var writeNs = new long[changes];
+        var writeNanoseconds = new long[changes];
         var work = new long[changes];
-        var slowest = new List<(long Ns, string What)>();
+        var slowest = new List<(long Nanoseconds, string What)>();
         var readHistogram = new long[1400];
         long readMax = 0, reads = 0;
         var stop = 0;
 
         var heapBefore = Heap();
-        var gcBefore = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
+        var collectionsBefore = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
         var pauseBefore = GC.GetTotalPauseDuration();
 
         var reader = new Thread(() =>
         {
             var keys = table.Keys;
-            var k = 0;
+            var keyIndex = 0;
             while (Volatile.Read(ref stop) == 0)
             {
-                var t0 = Stopwatch.GetTimestamp();
-                trie.TryGetMatch(in keys[k], out _, out _);
-                var ns = (Stopwatch.GetTimestamp() - t0) * 1_000_000_000L / Stopwatch.Frequency;
-                readHistogram[Bucket(ns)]++;
-                if (ns > readMax) readMax = ns;
+                var startTimestamp = Stopwatch.GetTimestamp();
+                trie.TryGetMatch(in keys[keyIndex], out _, out _);
+                var nanoseconds = (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000_000L / Stopwatch.Frequency;
+                readHistogram[Bucket(nanoseconds)]++;
+                if (nanoseconds > readMax)
+                    readMax = nanoseconds;
                 reads++;
-                if (++k == keys.Length) k = 0;
+                if (++keyIndex == keys.Length)
+                    keyIndex = 0;
             }
         });
         reader.Start();
@@ -126,21 +133,25 @@ public static class BartCoreChecks
         var removed = new HashSet<int>(changes);
         trie.TakeWork();
         var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        for (var c = 0; c < changes; c++)
+        for (var changeIndex = 0; changeIndex < changes; changeIndex++)
         {
-            var i = random.Next(table.Bits.Length);
-            var adding = removed.Remove(i);
-            var t0 = Stopwatch.GetTimestamp();
-            if (adding) trie.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-            else trie.TryRemove(in table.Bits[i], table.Lengths[i]);
-            writeNs[c] = (Stopwatch.GetTimestamp() - t0) * 1_000_000_000L / Stopwatch.Frequency;
-            work[c] = trie.TakeWork();
-            if (!adding) removed.Add(i);
-            if (slowest.Count < 6 || writeNs[c] > slowest[^1].Ns)
+            var prefixIndex = random.Next(table.Bits.Length);
+            var adding = removed.Remove(prefixIndex);
+            var startTimestamp = Stopwatch.GetTimestamp();
+            if (adding)
+                trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+            else
+                trie.TryRemove(in table.Bits[prefixIndex], table.Lengths[prefixIndex]);
+            writeNanoseconds[changeIndex] = (Stopwatch.GetTimestamp() - startTimestamp) * 1_000_000_000L / Stopwatch.Frequency;
+            work[changeIndex] = trie.TakeWork();
+            if (!adding)
+                removed.Add(prefixIndex);
+            if (slowest.Count < 6 || writeNanoseconds[changeIndex] > slowest[^1].Nanoseconds)
             {
-                slowest.Add((writeNs[c], $"{(adding ? "add" : "remove")} /{table.Lengths[i]}, {work[c]} copied"));
-                slowest.Sort((a, b) => b.Ns.CompareTo(a.Ns));
-                if (slowest.Count > 6) slowest.RemoveAt(6);
+                slowest.Add((writeNanoseconds[changeIndex], $"{(adding ? "add" : "remove")} /{table.Lengths[prefixIndex]}, {work[changeIndex]} copied"));
+                slowest.Sort((first, second) => second.Nanoseconds.CompareTo(first.Nanoseconds));
+                if (slowest.Count > 6)
+                    slowest.RemoveAt(6);
             }
         }
 
@@ -148,23 +159,24 @@ public static class BartCoreChecks
         Volatile.Write(ref stop, 1);
         reader.Join();
         var pause = GC.GetTotalPauseDuration() - pauseBefore;
-        var gc = (GC.CollectionCount(0) - gcBefore.Item1, GC.CollectionCount(1) - gcBefore.Item2, GC.CollectionCount(2) - gcBefore.Item3);
-        foreach (var i in removed) trie.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
+        var collections = (GC.CollectionCount(0) - collectionsBefore.Item1, GC.CollectionCount(1) - collectionsBefore.Item2, GC.CollectionCount(2) - collectionsBefore.Item3);
+        foreach (var prefixIndex in removed)
+            trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
         var heapGrowth = Heap() - heapBefore;
 
-        var total = writeNs.Sum();
-        Array.Sort(writeNs);
+        var total = writeNanoseconds.Sum();
+        Array.Sort(writeNanoseconds);
         Array.Sort(work);
-        string W(double q) => Format(writeNs[(int)Math.Min(writeNs.Length - 1, q * writeNs.Length)]);
-        long K(double q) => work[(int)Math.Min(work.Length - 1, q * work.Length)];
-        string R(double q) => Format(Percentile(readHistogram, reads, q));
+        string WritePercentile(double quantile) => Format(writeNanoseconds[(int)Math.Min(writeNanoseconds.Length - 1, quantile * writeNanoseconds.Length)]);
+        long WorkPercentile(double quantile) => work[(int)Math.Min(work.Length - 1, quantile * work.Length)];
+        string ReadPercentile(double quantile) => Format(Percentile(readHistogram, reads, quantile));
         Console.WriteLine($"BartTrie, {changes:N0} changes to real IPv4, {total / 1e9:F1} s in total; heap growth after re-adding the removed prefixes: {Mb(heapGrowth)}");
-        Console.WriteLine($"  writes:  p50 {W(0.5)}, p99 {W(0.99)}, p99.9 {W(0.999)}, p99.99 {W(0.9999)}, max {Format(writeNs[^1])}");
-        Console.WriteLine($"  copied per write: median {K(0.5)}, p99 {K(0.99)}, p99.99 {K(0.9999)}, max {work[^1]} array elements and nodes");
-        Console.WriteLine($"  lookups: p50 {R(0.5)}, p99 {R(0.99)}, p99.9 {R(0.999)}, p99.99 {R(0.9999)}, max {Format(readMax)}, {reads:N0} lookups");
-        Console.WriteLine($"  garbage collections: {gc.Item1} gen0, {gc.Item2} gen1, {gc.Item3} gen2, {pause.TotalMilliseconds:F0} ms paused in total; " +
+        Console.WriteLine($"  writes:  p50 {WritePercentile(0.5)}, p99 {WritePercentile(0.99)}, p99.9 {WritePercentile(0.999)}, p99.99 {WritePercentile(0.9999)}, max {Format(writeNanoseconds[^1])}");
+        Console.WriteLine($"  copied per write: median {WorkPercentile(0.5)}, p99 {WorkPercentile(0.99)}, p99.99 {WorkPercentile(0.9999)}, max {work[^1]} array elements and nodes");
+        Console.WriteLine($"  lookups: p50 {ReadPercentile(0.5)}, p99 {ReadPercentile(0.99)}, p99.9 {ReadPercentile(0.999)}, p99.99 {ReadPercentile(0.9999)}, max {Format(readMax)}, {reads:N0} lookups");
+        Console.WriteLine($"  garbage collections: {collections.Item1} gen0, {collections.Item2} gen1, {collections.Item3} gen2, {pause.TotalMilliseconds:F0} ms paused in total; " +
                           $"{allocated / (double)changes:N0} bytes allocated per write");
-        Console.WriteLine("  slowest writes: " + string.Join("; ", slowest.Select(w => $"{Format(w.Ns)} {w.What}")));
+        Console.WriteLine("  slowest writes: " + string.Join("; ", slowest.Select(slowWrite => $"{Format(slowWrite.Nanoseconds)} {slowWrite.What}")));
     }
 
     /// <summary>
@@ -174,62 +186,99 @@ public static class BartCoreChecks
     /// </summary>
     public static void Time()
     {
-        var v4 = RealData.V4;
-        var v6 = RealData.V6;
+        var ipv4Table = RealData.V4;
+        var ipv6Table = RealData.V6;
         var randomKeys = WidthData.Key32;
         var snapshotRandom = new SnapshotTrie<Bits32, int, int>(32);
         snapshotRandom.BeginBulkLoad();
         var bartRandom = new BartTrie<Bits32, int, int>(32);
         bartRandom.BeginBulkLoad();
-        for (var i = 0; i < WidthData.Prefix32.Length; i++)
+        for (var prefixIndex = 0; prefixIndex < WidthData.Prefix32.Length; prefixIndex++)
         {
-            snapshotRandom.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i);
-            bartRandom.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i);
+            snapshotRandom.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex);
+            bartRandom.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex);
         }
         snapshotRandom.EndBulkLoad();
         bartRandom.EndBulkLoad();
 
-        var snapshot4 = RealDataChecks.BulkSnapshot(v4, 32, 8);
-        var bart4 = BuildBart(v4, 32);
-        var snapshot6 = RealDataChecks.BulkSnapshot(v6, 128, 8);
-        var bart6 = BuildBart(v6, 128);
+        var snapshot4 = RealDataChecks.BulkSnapshot(ipv4Table, 32, 8);
+        var bart4 = BuildBart(ipv4Table, 32);
+        var snapshot6 = RealDataChecks.BulkSnapshot(ipv6Table, 128, 8);
+        var bart6 = BuildBart(ipv6Table, 128);
 
-        Report("random, SnapshotTrie", () => { long s = 0; foreach (var k in randomKeys) s += snapshotRandom.TryGetMatch(in k, out var p, out _) ? p : -1; return s; });
-        Report("random, BartTrie", () => { long s = 0; foreach (var k in randomKeys) s += bartRandom.TryGetMatch(in k, out var p, out _) ? p : -1; return s; });
-        Report("IPv4, SnapshotTrie", () => { long s = 0; foreach (var k in v4.Keys) s += snapshot4.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; return s; });
-        Report("IPv4, BartTrie", () => { long s = 0; foreach (var k in v4.Keys) s += bart4.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; return s; });
-        Report("IPv6, SnapshotTrie", () => { long s = 0; foreach (var k in v6.Keys) s += snapshot6.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; return s; });
-        Report("IPv6, BartTrie", () => { long s = 0; foreach (var k in v6.Keys) s += bart6.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; return s; });
+        Report("random, SnapshotTrie", () =>
+        {
+            long checksum = 0;
+            foreach (var key in randomKeys)
+                checksum += snapshotRandom.TryGetMatch(in key, out var prefix, out _) ? prefix : -1;
+            return checksum;
+        });
+        Report("random, BartTrie", () =>
+        {
+            long checksum = 0;
+            foreach (var key in randomKeys)
+                checksum += bartRandom.TryGetMatch(in key, out var prefix, out _) ? prefix : -1;
+            return checksum;
+        });
+        Report("IPv4, SnapshotTrie", () =>
+        {
+            long checksum = 0;
+            foreach (var key in ipv4Table.Keys)
+                checksum += snapshot4.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+            return checksum;
+        });
+        Report("IPv4, BartTrie", () =>
+        {
+            long checksum = 0;
+            foreach (var key in ipv4Table.Keys)
+                checksum += bart4.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+            return checksum;
+        });
+        Report("IPv6, SnapshotTrie", () =>
+        {
+            long checksum = 0;
+            foreach (var key in ipv6Table.Keys)
+                checksum += snapshot6.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+            return checksum;
+        });
+        Report("IPv6, BartTrie", () =>
+        {
+            long checksum = 0;
+            foreach (var key in ipv6Table.Keys)
+                checksum += bart6.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+            return checksum;
+        });
     }
 
     private static void Report(string name, Func<long> run)
     {
-        for (var i = 0; i < 5; i++) run();
-        var best = double.MaxValue;
-        for (var i = 0; i < 15; i++)
-        {
-            var sw = Stopwatch.StartNew();
+        for (var warmup = 0; warmup < 5; warmup++)
             run();
-            best = Math.Min(best, sw.Elapsed.TotalMilliseconds);
+        var best = double.MaxValue;
+        for (var trial = 0; trial < 15; trial++)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            run();
+            best = Math.Min(best, stopwatch.Elapsed.TotalMilliseconds);
         }
         Console.WriteLine($"  {name,-22} {best,7:F1} ms per 1M lookups");
     }
 
-    private static int Bucket(long ns) => ns < 10_000 ? (int)(ns / 10) : Math.Min(1399, 1000 + (int)(Math.Log(ns / 10_000.0) / Math.Log(1.05)));
+    private static int Bucket(long nanoseconds) => nanoseconds < 10_000 ? (int)(nanoseconds / 10) : Math.Min(1399, 1000 + (int)(Math.Log(nanoseconds / 10_000.0) / Math.Log(1.05)));
 
     private static long UpperBound(int bucket) => bucket < 1000 ? (bucket + 1) * 10L : (long)(10_000 * Math.Pow(1.05, bucket - 1000 + 1));
 
-    private static long Percentile(long[] histogram, long total, double q)
+    private static long Percentile(long[] histogram, long total, double quantile)
     {
-        var target = (long)Math.Ceiling(q * total);
+        var target = (long)Math.Ceiling(quantile * total);
         long seen = 0;
-        for (var b = 0; b < histogram.Length; b++)
-            if ((seen += histogram[b]) >= target)
-                return UpperBound(b);
+        for (var bucket = 0; bucket < histogram.Length; bucket++)
+            if ((seen += histogram[bucket]) >= target)
+                return UpperBound(bucket);
         return UpperBound(histogram.Length - 1);
     }
 
-    private static string Format(long ns) => ns < 10_000 ? $"{ns:N0} ns" : ns < 10_000_000 ? $"{ns / 1000.0:N0} us" : $"{ns / 1e6:N0} ms";
+    private static string Format(long nanoseconds) => nanoseconds < 10_000 ? $"{nanoseconds:N0} ns" : nanoseconds < 10_000_000 ? $"{nanoseconds / 1000.0:N0} us" : $"{nanoseconds / 1e6:N0} ms";
 }
 
 /// <summary>
@@ -251,45 +300,61 @@ public class BartCoreBenchmarks
 
     private static SnapshotTrie<Bits32, int, int> BuildRandomSnapshot()
     {
-        var t = new SnapshotTrie<Bits32, int, int>(32, 16, 8, 8);
-        t.BeginBulkLoad();
-        for (var i = 0; i < WidthData.Prefix32.Length; i++) t.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i);
-        t.EndBulkLoad();
-        return t;
+        var trie = new SnapshotTrie<Bits32, int, int>(32, 16, 8, 8);
+        trie.BeginBulkLoad();
+        for (var prefixIndex = 0; prefixIndex < WidthData.Prefix32.Length; prefixIndex++)
+            trie.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex);
+        trie.EndBulkLoad();
+        return trie;
     }
 
     private static BartTrie<Bits32, int, int> BuildRandomBart()
     {
-        var t = new BartTrie<Bits32, int, int>(32);
-        t.BeginBulkLoad();
-        for (var i = 0; i < WidthData.Prefix32.Length; i++) t.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i);
-        t.EndBulkLoad();
-        return t;
+        var trie = new BartTrie<Bits32, int, int>(32);
+        trie.BeginBulkLoad();
+        for (var prefixIndex = 0; prefixIndex < WidthData.Prefix32.Length; prefixIndex++)
+            trie.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex);
+        trie.EndBulkLoad();
+        return trie;
     }
 
     [Benchmark(Baseline = true), IterationCount(20), BenchmarkCategory("IPv4 lookup")]
-    public long IPv4_SnapshotTrie() { var t = V4Snapshot.Value; long sum = 0; foreach (var a in RealData.V4.Addresses) { var k = new Bits32(Optimization.FromAddressProperty(a)); sum += t.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long IPv4_SnapshotTrie() { var trie = V4Snapshot.Value; long sum = 0; foreach (var address in RealData.V4.Addresses) { var key = new Bits32(Optimization.FromAddressProperty(address)); sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark, IterationCount(20), BenchmarkCategory("IPv4 lookup")]
-    public long IPv4_BartTrie() { var t = V4Bart.Value; long sum = 0; foreach (var a in RealData.V4.Addresses) { var k = new Bits32(Optimization.FromAddressProperty(a)); sum += t.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long IPv4_BartTrie() { var trie = V4Bart.Value; long sum = 0; foreach (var address in RealData.V4.Addresses) { var key = new Bits32(Optimization.FromAddressProperty(address)); sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark, IterationCount(20), BenchmarkCategory("IPv4 lookup")]
-    public long IPv4_Frozen() { var t = V4Frozen.Value; long sum = 0; foreach (var a in RealData.V4.Addresses) { var k = new Bits32(Optimization.FromAddressProperty(a)); sum += t.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long IPv4_Frozen() { var trie = V4Frozen.Value; long sum = 0; foreach (var address in RealData.V4.Addresses) { var key = new Bits32(Optimization.FromAddressProperty(address)); sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark(Baseline = true), IterationCount(20), BenchmarkCategory("IPv6 lookup")]
-    public long IPv6_SnapshotTrie() { var t = V6Snapshot.Value; long sum = 0; foreach (var a in RealData.V6.Addresses) { var k = new Bits128(IPBits.V6(a)); sum += t.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long IPv6_SnapshotTrie() { var trie = V6Snapshot.Value; long sum = 0; foreach (var address in RealData.V6.Addresses) { var key = new Bits128(IPBits.V6(address)); sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark, IterationCount(20), BenchmarkCategory("IPv6 lookup")]
-    public long IPv6_BartTrie() { var t = V6Bart.Value; long sum = 0; foreach (var a in RealData.V6.Addresses) { var k = new Bits128(IPBits.V6(a)); sum += t.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long IPv6_BartTrie() { var trie = V6Bart.Value; long sum = 0; foreach (var address in RealData.V6.Addresses) { var key = new Bits128(IPBits.V6(address)); sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark, IterationCount(20), BenchmarkCategory("IPv6 lookup")]
-    public long IPv6_Frozen() { var t = V6Frozen.Value; long sum = 0; foreach (var a in RealData.V6.Addresses) { var k = new Bits128(IPBits.V6(a)); sum += t.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; } return sum; }
+    public long IPv6_Frozen() { var trie = V6Frozen.Value; long sum = 0; foreach (var address in RealData.V6.Addresses) { var key = new Bits128(IPBits.V6(address)); sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1; } return sum; }
 
     [Benchmark(Baseline = true), IterationCount(20), BenchmarkCategory("Random table in cache")]
-    public long Random_SnapshotTrie() { var t = RandomSnapshot.Value; long sum = 0; foreach (var k in WidthData.Key32) sum += t.TryGetMatch(in k, out var p, out var v) ? p + v : -1; return sum; }
+    public long Random_SnapshotTrie()
+    {
+        var trie = RandomSnapshot.Value;
+        long sum = 0;
+        foreach (var key in WidthData.Key32)
+            sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix + value : -1;
+        return sum;
+    }
 
     [Benchmark, IterationCount(20), BenchmarkCategory("Random table in cache")]
-    public long Random_BartTrie() { var t = RandomBart.Value; long sum = 0; foreach (var k in WidthData.Key32) sum += t.TryGetMatch(in k, out var p, out var v) ? p + v : -1; return sum; }
+    public long Random_BartTrie()
+    {
+        var trie = RandomBart.Value;
+        long sum = 0;
+        foreach (var key in WidthData.Key32)
+            sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix + value : -1;
+        return sum;
+    }
 
     [Benchmark(Baseline = true), IterationCount(10), BenchmarkCategory("IPv4 build")]
     public object IPv4_Build_SnapshotTrie_BulkLoad() => RealDataChecks.BulkSnapshot(RealData.V4, 32, 8);
@@ -318,35 +383,57 @@ public class BartCoreBenchmarks
 [Config(typeof(BartVariantConfig))]
 public class BartVariantBenchmarks
 {
-    private static readonly Lazy<BartTrie<Bits32, IPNetwork, int>> V4 = new(() => BartCoreChecks.BuildBart(RealData.V4, 32));
-    private static readonly Lazy<BartTrie<Bits128, IPNetwork, int>> V6 = new(() => BartCoreChecks.BuildBart(RealData.V6, 128));
-    private static readonly Lazy<BartTrie<Bits32, int, int>> Random = new(() =>
+    private static readonly Lazy<BartTrie<Bits32, IPNetwork, int>> RealIPv4Trie = new(() => BartCoreChecks.BuildBart(RealData.V4, 32));
+    private static readonly Lazy<BartTrie<Bits128, IPNetwork, int>> RealIPv6Trie = new(() => BartCoreChecks.BuildBart(RealData.V6, 128));
+    private static readonly Lazy<BartTrie<Bits32, int, int>> RandomTableTrie = new(() =>
     {
-        var t = new BartTrie<Bits32, int, int>(32);
-        t.BeginBulkLoad();
-        for (var i = 0; i < WidthData.Prefix32.Length; i++) t.TryAdd(in WidthData.Prefix32[i], WidthData.PrefixLengths[i], i, i);
-        t.EndBulkLoad();
-        return t;
+        var trie = new BartTrie<Bits32, int, int>(32);
+        trie.BeginBulkLoad();
+        for (var prefixIndex = 0; prefixIndex < WidthData.Prefix32.Length; prefixIndex++)
+            trie.TryAdd(in WidthData.Prefix32[prefixIndex], WidthData.PrefixLengths[prefixIndex], prefixIndex, prefixIndex);
+        trie.EndBulkLoad();
+        return trie;
     });
 
     [Benchmark]
-    public long RandomTable() { var t = Random.Value; long sum = 0; foreach (var k in WidthData.Key32) sum += t.TryGetMatch(in k, out var p, out var v) ? p + v : -1; return sum; }
+    public long RandomTable()
+    {
+        var trie = RandomTableTrie.Value;
+        long sum = 0;
+        foreach (var key in WidthData.Key32)
+            sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix + value : -1;
+        return sum;
+    }
 
     [Benchmark]
-    public long RealIPv4() { var t = V4.Value; long sum = 0; foreach (var k in RealData.V4.Keys) sum += t.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; return sum; }
+    public long RealIPv4()
+    {
+        var trie = RealIPv4Trie.Value;
+        long sum = 0;
+        foreach (var key in RealData.V4.Keys)
+            sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+        return sum;
+    }
 
     [Benchmark]
-    public long RealIPv6() { var t = V6.Value; long sum = 0; foreach (var k in RealData.V6.Keys) sum += t.TryGetMatch(in k, out var p, out var v) ? p.PrefixLength + v : -1; return sum; }
+    public long RealIPv6()
+    {
+        var trie = RealIPv6Trie.Value;
+        long sum = 0;
+        foreach (var key in RealData.V6.Keys)
+            sum += trie.TryGetMatch(in key, out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+        return sum;
+    }
 }
 
 public class BartVariantConfig : BenchmarkDotNet.Configs.ManualConfig
 {
     public BartVariantConfig()
     {
-        BenchmarkDotNet.Jobs.Job Variant(string id, string prune, string slotBest) => BenchmarkDotNet.Jobs.Job.Default
+        BenchmarkDotNet.Jobs.Job Variant(string jobId, string prune, string slotBest) => BenchmarkDotNet.Jobs.Job.Default
             .WithIterationCount(20)
             .WithEnvironmentVariables(new BenchmarkDotNet.Jobs.EnvironmentVariable("BART_PRUNE", prune), new BenchmarkDotNet.Jobs.EnvironmentVariable("BART_SLOTBEST", slotBest))
-            .WithId(id);
+            .WithId(jobId);
 
         AddJob(Variant("Plain", "0", "0").AsBaseline());
         AddJob(Variant("Pruned", "1", "0"));

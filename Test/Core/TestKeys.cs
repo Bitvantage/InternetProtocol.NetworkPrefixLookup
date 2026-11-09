@@ -174,7 +174,7 @@ public static class TestKeys
                 keys.Add(TKey.SetBits(bits, length - 1, 1, 1 - TKey.GetBits(bits, length - 1, 1))); // the sibling
         }
 
-        for (var i = 0; i < 2000; i++)
+        for (var randomKeyIndex = 0; randomKeyIndex < 2000; randomKeyIndex++)
             keys.Add(RandomKey<TKey>(random));
         return keys;
     }
@@ -209,9 +209,9 @@ public sealed class ReferenceTrie<TKey> where TKey : struct, IBitKey<TKey>
     public List<(int Length, int Value)> Matches(TKey bits, int length)
     {
         var result = new List<(int, int)>();
-        for (var l = length; l >= 0; l--)
-            if (_values.TryGetValue((TKey.Truncate(bits, l), l), out var value))
-                result.Add((l, value));
+        for (var candidateLength = length; candidateLength >= 0; candidateLength--)
+            if (_values.TryGetValue((TKey.Truncate(bits, candidateLength), candidateLength), out var value))
+                result.Add((candidateLength, value));
         return result;
     }
 
@@ -220,7 +220,7 @@ public sealed class ReferenceTrie<TKey> where TKey : struct, IBitKey<TKey>
     {
         var truncated = TKey.Truncate(bits, length);
         var mask = TKey.MaskFor(length);
-        return InOrder().Where(p => p.Length >= length && TKey.MatchesUnderMask(p.Bits, truncated, mask)).Select(p => p.Value).ToList();
+        return InOrder().Where(storedPrefix => storedPrefix.Length >= length && TKey.MatchesUnderMask(storedPrefix.Bits, truncated, mask)).Select(storedPrefix => storedPrefix.Value).ToList();
     }
 
     /// <summary>
@@ -233,8 +233,8 @@ public sealed class ReferenceTrie<TKey> where TKey : struct, IBitKey<TKey>
         {
             _covering = new HashSet<(TKey, int)>();
             foreach (var (stored, storedLength) in _values.Keys)
-                for (var l = 0; l <= storedLength; l++)
-                    _covering.Add((TKey.Truncate(stored, l), l));
+                for (var coveringLength = 0; coveringLength <= storedLength; coveringLength++)
+                    _covering.Add((TKey.Truncate(stored, coveringLength), coveringLength));
         }
 
         return Matches(bits, length).Count > 0 || _covering.Contains((TKey.Truncate(bits, length), length));
@@ -245,16 +245,17 @@ public sealed class ReferenceTrie<TKey> where TKey : struct, IBitKey<TKey>
     {
         if (_inOrder != null)
             return _inOrder;
-        var list = _inOrder = _values.Select(p => (p.Key.Bits, p.Key.Length, p.Value)).ToList();
-        list.Sort((a, b) =>
+        var list = _inOrder = _values.Select(entry => (entry.Key.Bits, entry.Key.Length, entry.Value)).ToList();
+        list.Sort((left, right) =>
         {
             for (var offset = 0; offset < TKey.Width; offset += 8)
             {
-                var c = TKey.GetBits(a.Bits, offset, 8).CompareTo(TKey.GetBits(b.Bits, offset, 8));
-                if (c != 0) return c;
+                var comparison = TKey.GetBits(left.Bits, offset, 8).CompareTo(TKey.GetBits(right.Bits, offset, 8));
+                if (comparison != 0)
+                    return comparison;
             }
 
-            return a.Length.CompareTo(b.Length);
+            return left.Length.CompareTo(right.Length);
         });
         return list;
     }

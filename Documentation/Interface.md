@@ -329,7 +329,7 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
 
     public WriteBatch BeginBatch();
     public FrozenIPPrefixLookup<TPrefix, TAdapter, TValue> Freeze(FrozenBitTrieOptions? options = null);   // both families
-    public FrozenIPPrefixLookup<TPrefix, TAdapter, TValue> Freeze(FrozenBitTrieOptions ipv4, FrozenBitTrieOptions ipv6);
+    public FrozenIPPrefixLookup<TPrefix, TAdapter, TValue> Freeze(FrozenBitTrieOptions ipv4Options, FrozenBitTrieOptions ipv6Options);
     public IPLookupStatistics GetStatistics();
     public string ToTextTree(AddressFamily family);
     public string ToDotTree(AddressFamily family);
@@ -338,7 +338,7 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
 public class FrozenIPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup<TPrefix, TValue>
     where TAdapter : struct, IIPPrefixAdapter<TPrefix>
 {
-    protected internal FrozenIPPrefixLookup(IPPrefixLookup<TPrefix, TAdapter, TValue> source, FrozenBitTrieOptions? ipv4, FrozenBitTrieOptions? ipv6);
+    protected internal FrozenIPPrefixLookup(IPPrefixLookup<TPrefix, TAdapter, TValue> source, FrozenBitTrieOptions? ipv4Options, FrozenBitTrieOptions? ipv6Options);
     public IPLookupOptions Options { get; }    // those of the lookup it was frozen from
     public long Bytes { get; }
 }
@@ -353,7 +353,7 @@ public readonly record struct IPLookupStatistics(BitTrieStatistics IPv4, BitTrie
 - **Batches** begin a batch on both families. On commit each family publishes atomically, IPv4 first, so a reader can
   see the new IPv4 prefixes a moment before the new IPv6 ones. If either half's writes failed, nothing is published.
 - **Freezing** copies both families under both writer locks, so a frozen copy is the lookup at one moment.
-  `Freeze(options)` applies one layout to both families; `Freeze(ipv4, ipv6)` takes one for each.
+  `Freeze(options)` applies one layout to both families; `Freeze(ipv4Options, ipv6Options)` takes one for each.
 - **Shared code.** The read-only members of the two classes are written once, in an internal struct that each class
   forwards to, so no infrastructure type is public.
 - **Adapter packages** derive their own pair: the frozen class's protected constructor takes the read-write lookup to
@@ -438,7 +438,8 @@ static FrozenIPNetworkLookup<int> Load() => new IPNetworkLookup<int>(LoadPrefixe
 void Reload() => _origins = Load();   // readers switch on their next lookup
 
 // on many threads
-if (_origins.TryGetMatchValue(packet.SourceAddress, out var asn)) Count(asn);
+if (_origins.TryGetMatchValue(packet.SourceAddress, out var asn))
+    Count(asn);
 ```
 
 One routing table per VRF:
@@ -472,7 +473,7 @@ differs from that proposal:
 | Exact lookups | `TryGetValue(bits, length, out value)` | Also an overload that returns the prefix object |
 | Frozen root | 16 or 18 bits always | Sized to the number of prefixes unless `RootBits` is given, so small and empty tables stay small |
 | Frozen layout | Leaf-pushed unless the caller chose otherwise | Chosen from the data unless the caller chooses, because leaf-pushed tables can grow to gigabytes on scattered prefixes |
-| Freezing | `Freeze(ipv4 = null, ipv6 = null)` | `Freeze(options)` for both families and `Freeze(ipv4, ipv6)` for one each: the single method let `Freeze(compressed)` compress only IPv4. Writers wait only while the prefixes are copied |
+| Freezing | `Freeze(ipv4 = null, ipv6 = null)` | `Freeze(options)` for both families and `Freeze(ipv4Options, ipv6Options)` for one each: the single method let `Freeze(compressed)` compress only IPv4. Writers wait only while the prefixes are copied |
 | IPv4-mapped addresses | Not covered | `IPLookupOptions.MapIPv4MappedAddresses`, off by default and on for MaxMind lookups, with prefixes inside `::ffff:0:0/96` rejected while it is on. The queries about networks follow it, so that `TryGetMatch(::ffff:10.1.2.3/128)` answers as the address `::ffff:10.1.2.3` does |
 | Entry types | `PrefixEntry` out, `KeyValuePair` in | Both in: the constructors from a sequence also take `PrefixEntry`, so `new IPNetworkLookup<int>(other)` copies a lookup and `new IPNetworkLookup<int>(other.GetSubnets(block))` part of one, while dictionaries still go in as they are. Results keep `PrefixEntry` for its `Prefix` name |
 | Namespace | Not stated; version 2 and the first builds used `Bitvantage.InternetProtocol` | `Bitvantage.InternetProtocol.NetworkPrefixLookup`, the core package's name, for every package. The shared namespace let one `using` cover the `NetworkPrefix` type and the lookups; with that package gone, the package's own name keeps generic names such as `BitTrie`, `PrefixEntry` and `WriteBatch` apart from Bitvantage's other `Bitvantage.InternetProtocol` libraries. It became possible once no class was named `NetworkPrefixLookup` |

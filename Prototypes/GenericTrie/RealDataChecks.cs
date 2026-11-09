@@ -27,47 +27,53 @@ public static class RealDataChecks
 {
     public static CachedKeyTrie<TKey, IPNetwork, int> BuildCached<TKey>(RealData.Table<TKey> table) where TKey : struct, IBitKey<TKey>
     {
-        var t = new CachedKeyTrie<TKey, IPNetwork, int>();
-        for (var i = 0; i < table.Bits.Length; i++) t.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-        return t;
+        var trie = new CachedKeyTrie<TKey, IPNetwork, int>();
+        for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+            trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+        return trie;
     }
 
     public static PooledTrie<TKey, IPNetwork, int> BuildPooled<TKey>(RealData.Table<TKey> table, int indexBits) where TKey : struct, IBitKey<TKey>
     {
-        var t = new PooledTrie<TKey, IPNetwork, int>();
-        for (var i = 0; i < table.Bits.Length; i++) t.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-        t.Relayout(NodeOrder.DepthFirst);
-        if (indexBits > 0) t.BuildIndex(indexBits);
-        return t;
+        var trie = new PooledTrie<TKey, IPNetwork, int>();
+        for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+            trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+        trie.Relayout(NodeOrder.DepthFirst);
+        if (indexBits > 0)
+            trie.BuildIndex(indexBits);
+        return trie;
     }
 
     public static PooledTrie<TKey, IPNetwork, int> BuildMultiLevel<TKey>(RealData.Table<TKey> table, int rootBits, int subBits, int threshold, int width, bool report = false)
         where TKey : struct, IBitKey<TKey>
     {
-        var t = BuildPooled(table, 0);
-        var (subTables, bytes) = t.BuildMultiLevelIndex(rootBits, subBits, threshold, width);
+        var trie = BuildPooled(table, 0);
+        var (subTables, bytes) = trie.BuildMultiLevelIndex(rootBits, subBits, threshold, width);
         if (report)
             Console.WriteLine($"  {"",-26} multi-level {rootBits}/{subBits}/{threshold}: {subTables:N0} sub-tables, index {bytes / 1048576.0:F1} MB");
-        return t;
+        return trie;
     }
 
     public static SnapshotTrie<TKey, IPNetwork, int> BuildSnapshot<TKey>(RealData.Table<TKey> table, int width, int threshold = 8, bool compact = true)
         where TKey : struct, IBitKey<TKey>
     {
-        var t = new SnapshotTrie<TKey, IPNetwork, int>(width, 16, 8, threshold);
-        for (var i = 0; i < table.Bits.Length; i++) t.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-        if (compact) t.Compact();
-        return t;
+        var trie = new SnapshotTrie<TKey, IPNetwork, int>(width, 16, 8, threshold);
+        for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+            trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+        if (compact)
+            trie.Compact();
+        return trie;
     }
 
     public static SnapshotTrie<TKey, IPNetwork, int> BulkSnapshot<TKey>(RealData.Table<TKey> table, int width, int threshold)
         where TKey : struct, IBitKey<TKey>
     {
-        var t = new SnapshotTrie<TKey, IPNetwork, int>(width, 16, 8, threshold);
-        t.BeginBulkLoad();
-        for (var i = 0; i < table.Bits.Length; i++) t.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-        t.EndBulkLoad();
-        return t;
+        var trie = new SnapshotTrie<TKey, IPNetwork, int>(width, 16, 8, threshold);
+        trie.BeginBulkLoad();
+        for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+            trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+        trie.EndBulkLoad();
+        return trie;
     }
 
     /// <summary>Insert cost with the index kept current, the garbage that leaves, and what compaction costs and reclaims.</summary>
@@ -82,73 +88,78 @@ public static class RealDataChecks
         foreach (var threshold in new[] { 8, 32 })
         {
             GC.Collect();
-            var sw = Stopwatch.StartNew();
-            var t = new SnapshotTrie<TKey, IPNetwork, int>(width, 16, 8, threshold);
-            for (var i = 0; i < table.Bits.Length; i++) t.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-            var insert = sw.Elapsed.TotalMilliseconds;
-            var garbage = t.Garbage;
-            var before = t.MemoryInBytes();
-            sw.Restart();
-            t.Compact();
-            var compact = sw.Elapsed.TotalMilliseconds;
-            var after = t.MemoryInBytes();
+            var stopwatch = Stopwatch.StartNew();
+            var trie = new SnapshotTrie<TKey, IPNetwork, int>(width, 16, 8, threshold);
+            for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+                trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+            var insert = stopwatch.Elapsed.TotalMilliseconds;
+            var garbage = trie.Garbage;
+            var before = trie.MemoryInBytes();
+            stopwatch.Restart();
+            trie.Compact();
+            var compact = stopwatch.Elapsed.TotalMilliseconds;
+            var after = trie.MemoryInBytes();
 
-            sw.Restart();
-            for (var i = 0; i < table.Bits.Length; i += 100) t.TryRemove(in table.Bits[i], table.Lengths[i]);
-            for (var i = 0; i < table.Bits.Length; i += 100) t.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-            var churnOps = 2 * ((table.Bits.Length + 99) / 100);
-            var churn = sw.Elapsed.TotalMilliseconds;
+            stopwatch.Restart();
+            for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex += 100)
+                trie.TryRemove(in table.Bits[prefixIndex], table.Lengths[prefixIndex]);
+            for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex += 100)
+                trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+            var churnOperations = 2 * ((table.Bits.Length + 99) / 100);
+            var churn = stopwatch.Elapsed.TotalMilliseconds;
 
             GC.Collect();
-            sw.Restart();
+            stopwatch.Restart();
             var bulk = new SnapshotTrie<TKey, IPNetwork, int>(width, 16, 8, threshold);
             bulk.BeginBulkLoad();
-            for (var i = 0; i < table.Bits.Length; i++) bulk.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-            var bulkInsert = sw.Elapsed.TotalMilliseconds;
+            for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+                bulk.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+            var bulkInsert = stopwatch.Elapsed.TotalMilliseconds;
             bulk.EndBulkLoad();
-            var bulkTotal = sw.Elapsed.TotalMilliseconds;
+            var bulkTotal = stopwatch.Elapsed.TotalMilliseconds;
             Console.WriteLine($"{name}, threshold {threshold}: bulk load {bulkInsert:F0} ms inserts + {bulkTotal - bulkInsert:F0} ms index = {bulkTotal:F0} ms, memory {bulk.MemoryInBytes() / 1048576.0:F1} MB");
 
             Console.WriteLine($"{name}, threshold {threshold}: insert all {insert:F0} ms ({insert * 1000 / table.Bits.Length:F2} us each), " +
                               $"garbage sub-table entries {garbage.SubEntries:N0}, memory {before / 1048576.0:F1} MB -> compact {compact:F0} ms -> {after / 1048576.0:F1} MB; " +
-                              $"then {churnOps:N0} removes and re-adds: {churn * 1000 / churnOps:F2} us each");
+                              $"then {churnOperations:N0} removes and re-adds: {churn * 1000 / churnOperations:F2} us each");
         }
     }
 
     public static PooledTrie<TKey, IPNetwork, int> BuildLeafPushed<TKey>(RealData.Table<TKey> table, int rootBits, int subBits, int width, bool report = false)
         where TKey : struct, IBitKey<TKey>
     {
-        var t = BuildPooled(table, 0);
-        var sw = Stopwatch.StartNew();
-        var (tables, bytes) = t.BuildLeafPushed(rootBits, subBits, width);
+        var trie = BuildPooled(table, 0);
+        var stopwatch = Stopwatch.StartNew();
+        var (tables, bytes) = trie.BuildLeafPushed(rootBits, subBits, width);
         if (report)
-            Console.WriteLine($"  {"",-26} leaf-pushed {rootBits}/{subBits}: {tables:N0} child tables, tables {bytes / 1048576.0:F1} MB, built in {sw.Elapsed.TotalMilliseconds:F0} ms");
-        return t;
+            Console.WriteLine($"  {"",-26} leaf-pushed {rootBits}/{subBits}: {tables:N0} child tables, tables {bytes / 1048576.0:F1} MB, built in {stopwatch.Elapsed.TotalMilliseconds:F0} ms");
+        return trie;
     }
 
     public static PooledTrie<TKey, IPNetwork, int> BuildCompressed<TKey>(RealData.Table<TKey> table, int rootBits, int width, bool report = false)
         where TKey : struct, IBitKey<TKey>
     {
-        var t = BuildPooled(table, 0);
-        var sw = Stopwatch.StartNew();
-        var (nodes, bytes) = t.BuildCompressed(rootBits, width);
+        var trie = BuildPooled(table, 0);
+        var stopwatch = Stopwatch.StartNew();
+        var (nodes, bytes) = trie.BuildCompressed(rootBits, width);
         if (report)
-            Console.WriteLine($"  {"",-26} compressed {rootBits}/6: {nodes:N0} nodes, tables {bytes / 1048576.0:F1} MB, built in {sw.Elapsed.TotalMilliseconds:F0} ms");
-        return t;
+            Console.WriteLine($"  {"",-26} compressed {rootBits}/6: {nodes:N0} nodes, tables {bytes / 1048576.0:F1} MB, built in {stopwatch.Elapsed.TotalMilliseconds:F0} ms");
+        return trie;
     }
 
     private static double AverageTableReads<TKey>(RealData.Table<TKey> table, PooledTrie<TKey, IPNetwork, int> trie) where TKey : struct, IBitKey<TKey>
     {
         long reads = 0;
-        for (var i = 0; i < table.Keys.Length; i++) reads += trie.CountTableReads(in table.Keys[i]);
+        for (var keyIndex = 0; keyIndex < table.Keys.Length; keyIndex++)
+            reads += trie.CountTableReads(in table.Keys[keyIndex]);
         return reads / (double)table.Keys.Length;
     }
 
     public static NetworkPrefixLookup<int> BuildCurrent<TKey>(RealData.Table<TKey> table) where TKey : struct, IBitKey<TKey>
     {
         var lookup = new NetworkPrefixLookup<int>();
-        for (var i = 0; i < table.Networks.Length; i++)
-            lookup.TryAdd(new NetworkPrefix(table.Networks[i].BaseAddress, table.Networks[i].PrefixLength), table.Asns[i]);
+        for (var prefixIndex = 0; prefixIndex < table.Networks.Length; prefixIndex++)
+            lookup.TryAdd(new NetworkPrefix(table.Networks[prefixIndex].BaseAddress, table.Networks[prefixIndex].PrefixLength), table.Asns[prefixIndex]);
         return lookup;
     }
 
@@ -163,53 +174,55 @@ public static class RealDataChecks
         Console.WriteLine($"{name}: {table.Bits.Length:N0} prefixes, {table.Keys.Length:N0} keys");
         var current = BuildCurrent(table);
         var expected = new string?[table.Keys.Length];
-        for (var i = 0; i < expected.Length; i++)
-            expected[i] = current.TryGetMatch(table.Addresses[i], out var r) ? $"{r.Prefix.Address}/{r.Prefix.Length}" : null;
+        for (var keyIndex = 0; keyIndex < expected.Length; keyIndex++)
+            expected[keyIndex] = current.TryGetMatch(table.Addresses[keyIndex], out var match) ? $"{match.Prefix.Address}/{match.Prefix.Length}" : null;
 
         void Check(string variant, Func<int, IPNetwork?> lookup)
         {
             var mismatches = 0;
-            for (var i = 0; i < expected.Length; i++)
+            for (var keyIndex = 0; keyIndex < expected.Length; keyIndex++)
             {
-                var r = lookup(i);
-                var text = r == null ? null : $"{r.Value.BaseAddress}/{r.Value.PrefixLength}";
-                if (text != expected[i] && mismatches++ < 3)
-                    Console.WriteLine($"    mismatch at {table.Addresses[i]}: expected {expected[i]}, got {text}");
+                var network = lookup(keyIndex);
+                var text = network == null ? null : $"{network.Value.BaseAddress}/{network.Value.PrefixLength}";
+                if (text != expected[keyIndex] && mismatches++ < 3)
+                    Console.WriteLine($"    mismatch at {table.Addresses[keyIndex]}: expected {expected[keyIndex]}, got {text}");
             }
             Console.WriteLine($"  {variant,-26} mismatches: {mismatches}");
         }
 
         var cached = BuildCached(table);
-        Check("cached (baseline)", i => cached.TryGetMatch(in table.Keys[i], out var p, out _) ? p : null);
+        Check("cached (baseline)", keyIndex => cached.TryGetMatch(in table.Keys[keyIndex], out var prefix, out _) ? prefix : null);
         foreach (var bits in indexSizes)
         {
             var pooled = BuildPooled(table, bits);
-            Check(bits == 0 ? "pooled, depth-first" : $"pooled, index {bits}", i => pooled.TryGetMatch(in table.Keys[i], out var p, out _) ? p : null);
+            Check(bits == 0 ? "pooled, depth-first" : $"pooled, index {bits}", keyIndex => pooled.TryGetMatch(in table.Keys[keyIndex], out var prefix, out _) ? prefix : null);
             long visited = 0;
-            for (var i = 0; i < table.Keys.Length; i++) visited += pooled.CountVisited(in table.Keys[i]);
+            for (var keyIndex = 0; keyIndex < table.Keys.Length; keyIndex++)
+                visited += pooled.CountVisited(in table.Keys[keyIndex]);
             Console.WriteLine($"  {"",-26} nodes: {pooled.NodeCount:N0}, average nodes visited: {visited / (double)table.Keys.Length:F2}");
         }
 
         foreach (var (rootBits, subBits) in width == 32 ? new[] { (16, 8), (20, 4), (24, 8) } : new[] { (16, 8), (20, 8) })
         {
-            var lp = BuildLeafPushed(table, rootBits, subBits, width, report: true);
-            Check($"leaf-pushed {rootBits}/{subBits}", i => lp.TryGetMatch(in table.Keys[i], out var p, out _) ? p : null);
-            Console.WriteLine($"  {"",-26} average table reads: {AverageTableReads(table, lp):F2}");
+            var leafPushed = BuildLeafPushed(table, rootBits, subBits, width, report: true);
+            Check($"leaf-pushed {rootBits}/{subBits}", keyIndex => leafPushed.TryGetMatch(in table.Keys[keyIndex], out var prefix, out _) ? prefix : null);
+            Console.WriteLine($"  {"",-26} average table reads: {AverageTableReads(table, leafPushed):F2}");
         }
 
         foreach (var rootBits in new[] { 16, 18, 20 })
         {
-            var cp = BuildCompressed(table, rootBits, width, report: true);
-            Check($"compressed {rootBits}/6", i => cp.TryGetMatch(in table.Keys[i], out var p, out _) ? p : null);
-            Console.WriteLine($"  {"",-26} average table reads, including the answer: {AverageTableReads(table, cp):F2}");
+            var compressed = BuildCompressed(table, rootBits, width, report: true);
+            Check($"compressed {rootBits}/6", keyIndex => compressed.TryGetMatch(in table.Keys[keyIndex], out var prefix, out _) ? prefix : null);
+            Console.WriteLine($"  {"",-26} average table reads, including the answer: {AverageTableReads(table, compressed):F2}");
         }
 
         foreach (var (rootBits, subBits, threshold) in new[] { (16, 8, 8), (16, 8, 32), (16, 4, 4), (16, 4, 16) })
         {
-            var ml = BuildMultiLevel(table, rootBits, subBits, threshold, width, report: true);
-            Check($"multi-level {rootBits}/{subBits}/{threshold}", i => ml.TryGetMatch(in table.Keys[i], out var p, out _) ? p : null);
+            var multiLevel = BuildMultiLevel(table, rootBits, subBits, threshold, width, report: true);
+            Check($"multi-level {rootBits}/{subBits}/{threshold}", keyIndex => multiLevel.TryGetMatch(in table.Keys[keyIndex], out var prefix, out _) ? prefix : null);
             long visited = 0;
-            for (var i = 0; i < table.Keys.Length; i++) visited += ml.CountVisited(in table.Keys[i]);
+            for (var keyIndex = 0; keyIndex < table.Keys.Length; keyIndex++)
+                visited += multiLevel.CountVisited(in table.Keys[keyIndex]);
             Console.WriteLine($"  {"",-26} average nodes visited: {visited / (double)table.Keys.Length:F2}");
         }
     }
@@ -244,13 +257,14 @@ public static class RealDataChecks
             _ => throw new ArgumentException(variant)
         };
 
-        for (var i = 0; i < 5; i++) run();
-        var best = double.MaxValue;
-        for (var i = 0; i < 15; i++)
-        {
-            var sw = Stopwatch.StartNew();
+        for (var warmupRun = 0; warmupRun < 5; warmupRun++)
             run();
-            best = Math.Min(best, sw.Elapsed.TotalMilliseconds);
+        var best = double.MaxValue;
+        for (var timedRun = 0; timedRun < 15; timedRun++)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            run();
+            best = Math.Min(best, stopwatch.Elapsed.TotalMilliseconds);
         }
         Console.WriteLine($"{variant,-16} best of 15: {best,7:F1} ms per 1M lookups");
     }
@@ -264,15 +278,18 @@ public static class RealDataChecks
 
         var random = new Random(5);
         var chosen = Enumerable.Range(0, table.Bits.Length).Where(_ => random.Next(100) < percent).OrderBy(_ => random.Next()).ToArray();
-        var sw = Stopwatch.StartNew();
-        foreach (var i in chosen) trie.TryRemove(in table.Bits[i], table.Lengths[i]);
-        foreach (var i in chosen.OrderBy(_ => random.Next())) trie.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-        var churnMs = sw.Elapsed.TotalMilliseconds;
+        var stopwatch = Stopwatch.StartNew();
+        foreach (var prefixIndex in chosen)
+            trie.TryRemove(in table.Bits[prefixIndex], table.Lengths[prefixIndex]);
+        foreach (var prefixIndex in chosen.OrderBy(_ => random.Next()))
+            trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+        var churnMilliseconds = stopwatch.Elapsed.TotalMilliseconds;
         var garbage = trie.Garbage;
         var memoryChurned = trie.MemoryInBytes();
-        if (compact) trie.Compact();
+        if (compact)
+            trie.Compact();
 
-        Console.Error.WriteLine($"{percent}% churn: {chosen.Length * 2:N0} changes in {churnMs:F0} ms; garbage nodes {garbage.Nodes:N0}, values {garbage.Values:N0}, sub-table entries {garbage.SubEntries:N0}; " +
+        Console.Error.WriteLine($"{percent}% churn: {chosen.Length * 2:N0} changes in {churnMilliseconds:F0} ms; garbage nodes {garbage.Nodes:N0}, values {garbage.Values:N0}, sub-table entries {garbage.SubEntries:N0}; " +
                                 $"memory {memoryFresh / 1048576.0:F0} MB fresh, {memoryChurned / 1048576.0:F0} MB churned{(compact ? $", {trie.MemoryInBytes() / 1048576.0:F0} MB compacted" : "")}");
         return trie;
     }
@@ -293,30 +310,32 @@ public static class RealDataChecks
     private static void TailLatency<TKey>(RealData.Table<TKey> table, int width, bool compact, int changes) where TKey : struct, IBitKey<TKey>
     {
         var trie = BulkSnapshot(table, width, 8);
-        var writeNs = new long[changes];
-        var slowest = new List<(long Ns, string What)>();
+        var writeNanoseconds = new long[changes];
+        var slowest = new List<(long Nanoseconds, string What)>();
         var readHistogram = new long[LatencyBuckets];
-        long readMax = 0, reads = 0;
+        long readMaximum = 0, reads = 0;
         var stop = 0;
 
         GC.Collect();
         GC.WaitForPendingFinalizers();
-        var gcBefore = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
+        var collectionsBefore = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2));
         var pauseBefore = GC.GetTotalPauseDuration();
 
         var reader = new Thread(() =>
         {
             var keys = table.Keys;
-            var k = 0;
+            var keyIndex = 0;
             while (Volatile.Read(ref stop) == 0)
             {
-                var t0 = Stopwatch.GetTimestamp();
-                trie.TryGetMatch(in keys[k], out _, out _);
-                var ns = ToNanoseconds(Stopwatch.GetTimestamp() - t0);
-                readHistogram[LatencyBucket(ns)]++;
-                if (ns > readMax) readMax = ns;
+                var startTimestamp = Stopwatch.GetTimestamp();
+                trie.TryGetMatch(in keys[keyIndex], out _, out _);
+                var nanoseconds = ToNanoseconds(Stopwatch.GetTimestamp() - startTimestamp);
+                readHistogram[LatencyBucket(nanoseconds)]++;
+                if (nanoseconds > readMaximum)
+                    readMaximum = nanoseconds;
                 reads++;
-                if (++k == keys.Length) k = 0;
+                if (++keyIndex == keys.Length)
+                    keyIndex = 0;
             }
         });
         reader.Start();
@@ -326,46 +345,51 @@ public static class RealDataChecks
         int compactions = 0, growths = 0;
         if (changes == 0)
             Thread.Sleep(TimeSpan.FromSeconds(6)); // about as long as the runs with writes
-        for (var c = 0; c < changes; c++)
+        for (var changeIndex = 0; changeIndex < changes; changeIndex++)
         {
-            var i = random.Next(table.Bits.Length);
+            var prefixIndex = random.Next(table.Bits.Length);
             var memory = trie.MemoryInBytes();
-            var adding = removed.Remove(i);
-            var t0 = Stopwatch.GetTimestamp();
-            if (adding) trie.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-            else trie.TryRemove(in table.Bits[i], table.Lengths[i]);
+            var adding = removed.Remove(prefixIndex);
+            var startTimestamp = Stopwatch.GetTimestamp();
+            if (adding)
+                trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+            else
+                trie.TryRemove(in table.Bits[prefixIndex], table.Lengths[prefixIndex]);
             var compacted = compact && trie.Garbage.Values > trie.Count;
-            if (compacted) trie.Compact();
-            writeNs[c] = ToNanoseconds(Stopwatch.GetTimestamp() - t0);
-            if (!adding) removed.Add(i);
+            if (compacted)
+                trie.Compact();
+            writeNanoseconds[changeIndex] = ToNanoseconds(Stopwatch.GetTimestamp() - startTimestamp);
+            if (!adding)
+                removed.Add(prefixIndex);
 
             var grew = !compacted && trie.MemoryInBytes() != memory;
             compactions += compacted ? 1 : 0;
             growths += grew ? 1 : 0;
-            if (slowest.Count < 8 || writeNs[c] > slowest[^1].Ns)
+            if (slowest.Count < 8 || writeNanoseconds[changeIndex] > slowest[^1].Nanoseconds)
             {
-                var what = $"{(adding ? "add" : "remove")} /{table.Lengths[i]}{(grew ? ", arrays grew" : "")}{(compacted ? ", compacted" : "")}";
-                slowest.Add((writeNs[c], what));
-                slowest.Sort((a, b) => b.Ns.CompareTo(a.Ns));
-                if (slowest.Count > 8) slowest.RemoveAt(8);
+                var what = $"{(adding ? "add" : "remove")} /{table.Lengths[prefixIndex]}{(grew ? ", arrays grew" : "")}{(compacted ? ", compacted" : "")}";
+                slowest.Add((writeNanoseconds[changeIndex], what));
+                slowest.Sort((first, second) => second.Nanoseconds.CompareTo(first.Nanoseconds));
+                if (slowest.Count > 8)
+                    slowest.RemoveAt(8);
             }
         }
 
         Volatile.Write(ref stop, 1);
         reader.Join();
         var pause = GC.GetTotalPauseDuration() - pauseBefore;
-        var gc = (GC.CollectionCount(0) - gcBefore.Item1, GC.CollectionCount(1) - gcBefore.Item2, GC.CollectionCount(2) - gcBefore.Item3);
+        var collections = (GC.CollectionCount(0) - collectionsBefore.Item1, GC.CollectionCount(1) - collectionsBefore.Item2, GC.CollectionCount(2) - collectionsBefore.Item3);
 
-        Array.Sort(writeNs);
-        string W(double q) => Format(writeNs[(int)Math.Min(writeNs.Length - 1, q * writeNs.Length)]);
-        string R(double q) => Format(Percentile(readHistogram, reads, q));
+        Array.Sort(writeNanoseconds);
+        string W(double quantile) => Format(writeNanoseconds[(int)Math.Min(writeNanoseconds.Length - 1, quantile * writeNanoseconds.Length)]);
+        string R(double quantile) => Format(Percentile(readHistogram, reads, quantile));
         var mode = changes == 0 ? "idle writer" : compact ? "compacting when garbage exceeds live values" : "never compacting";
         Console.WriteLine($"{mode}: {changes:N0} changes, {growths} growths, {compactions} compactions, memory at end {trie.MemoryInBytes() / 1048576.0:F0} MB");
         if (changes > 0)
-            Console.WriteLine($"  writes:  p50 {W(0.5)}, p99 {W(0.99)}, p99.9 {W(0.999)}, p99.99 {W(0.9999)}, max {Format(writeNs[^1])}, total {writeNs.Sum() / 1e9:F1} s");
-        Console.WriteLine($"  lookups: p50 {R(0.5)}, p99 {R(0.99)}, p99.9 {R(0.999)}, p99.99 {R(0.9999)}, max {Format(readMax)}, {reads:N0} lookups");
-        Console.WriteLine($"  garbage collections: {gc.Item1} gen0, {gc.Item2} gen1, {gc.Item3} gen2, {pause.TotalMilliseconds:F0} ms paused in total");
-        Console.WriteLine("  slowest writes: " + string.Join("; ", slowest.Select(w => $"{Format(w.Ns)} {w.What}")));
+            Console.WriteLine($"  writes:  p50 {W(0.5)}, p99 {W(0.99)}, p99.9 {W(0.999)}, p99.99 {W(0.9999)}, max {Format(writeNanoseconds[^1])}, total {writeNanoseconds.Sum() / 1e9:F1} s");
+        Console.WriteLine($"  lookups: p50 {R(0.5)}, p99 {R(0.99)}, p99.9 {R(0.999)}, p99.99 {R(0.9999)}, max {Format(readMaximum)}, {reads:N0} lookups");
+        Console.WriteLine($"  garbage collections: {collections.Item1} gen0, {collections.Item2} gen1, {collections.Item3} gen2, {pause.TotalMilliseconds:F0} ms paused in total");
+        Console.WriteLine("  slowest writes: " + string.Join("; ", slowest.Select(write => $"{Format(write.Nanoseconds)} {write.What}")));
     }
 
     // lookup latencies: 10 ns buckets up to 10 us, then buckets 5% apart
@@ -373,24 +397,24 @@ public static class RealDataChecks
 
     private static long ToNanoseconds(long ticks) => ticks * 1_000_000_000L / Stopwatch.Frequency;
 
-    private static int LatencyBucket(long ns) =>
-        ns < 10_000 ? (int)(ns / 10) : Math.Min(LatencyBuckets - 1, 1000 + (int)(Math.Log(ns / 10_000.0) / Math.Log(1.05)));
+    private static int LatencyBucket(long nanoseconds) =>
+        nanoseconds < 10_000 ? (int)(nanoseconds / 10) : Math.Min(LatencyBuckets - 1, 1000 + (int)(Math.Log(nanoseconds / 10_000.0) / Math.Log(1.05)));
 
     private static long BucketUpperBound(int bucket) =>
         bucket < 1000 ? (bucket + 1) * 10L : (long)(10_000 * Math.Pow(1.05, bucket - 1000 + 1));
 
-    private static long Percentile(long[] histogram, long total, double q)
+    private static long Percentile(long[] histogram, long total, double quantile)
     {
-        var target = (long)Math.Ceiling(q * total);
+        var target = (long)Math.Ceiling(quantile * total);
         long seen = 0;
-        for (var b = 0; b < histogram.Length; b++)
-            if ((seen += histogram[b]) >= target)
-                return BucketUpperBound(b);
+        for (var bucket = 0; bucket < histogram.Length; bucket++)
+            if ((seen += histogram[bucket]) >= target)
+                return BucketUpperBound(bucket);
         return BucketUpperBound(histogram.Length - 1);
     }
 
-    private static string Format(long ns) =>
-        ns < 10_000 ? $"{ns:N0} ns" : ns < 10_000_000 ? $"{ns / 1000.0:N0} us" : $"{ns / 1e6:N0} ms";
+    private static string Format(long nanoseconds) =>
+        nanoseconds < 10_000 ? $"{nanoseconds:N0} ns" : nanoseconds < 10_000_000 ? $"{nanoseconds / 1000.0:N0} us" : $"{nanoseconds / 1e6:N0} ms";
 
     /// <summary>
     ///     Reader throughput on the real IPv4 table with three reader threads for 10 seconds, while the writer is idle,
@@ -408,41 +432,46 @@ public static class RealDataChecks
 
             var writer = new Thread(() =>
             {
-                if (mode.StartsWith("idle")) return;
+                if (mode.StartsWith("idle"))
+                    return;
                 var random = new Random(9);
                 var removed = new HashSet<int>();
                 while (Volatile.Read(ref stop) == 0)
                 {
-                    var i = random.Next(table.Bits.Length);
-                    if (removed.Remove(i)) trie.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-                    else { removed.Add(i); trie.TryRemove(in table.Bits[i], table.Lengths[i]); }
+                    var prefixIndex = random.Next(table.Bits.Length);
+                    if (removed.Remove(prefixIndex))
+                        trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+                    else { removed.Add(prefixIndex); trie.TryRemove(in table.Bits[prefixIndex], table.Lengths[prefixIndex]); }
                     if (++writes % 50_000 == 0 && mode == "updates and compaction") { trie.Compact(); compactions++; }
                 }
             });
 
-            var readers = Enumerable.Range(0, 3).Select(r => new Thread(() =>
+            var readers = Enumerable.Range(0, 3).Select(readerIndex => new Thread(() =>
             {
                 var keys = table.Keys;
-                long n = 0;
-                var k = r * 333_333;
+                long lookups = 0;
+                var keyIndex = readerIndex * 333_333;
                 while (Volatile.Read(ref stop) == 0)
                 {
-                    for (var j = 0; j < 1000; j++)
+                    for (var lookupInBatch = 0; lookupInBatch < 1000; lookupInBatch++)
                     {
-                        trie.TryGetMatch(in keys[k], out _, out _);
-                        if (++k == keys.Length) k = 0;
+                        trie.TryGetMatch(in keys[keyIndex], out _, out _);
+                        if (++keyIndex == keys.Length)
+                            keyIndex = 0;
                     }
-                    n += 1000;
+                    lookups += 1000;
                 }
-                counts[r] = n;
+                counts[readerIndex] = lookups;
             })).ToArray();
 
             writer.Start();
-            foreach (var t in readers) t.Start();
+            foreach (var readerThread in readers)
+                readerThread.Start();
             Thread.Sleep(TimeSpan.FromSeconds(10));
             Volatile.Write(ref stop, 1);
             writer.Join();
-            foreach (var t in readers) t.Join();
+            foreach (var readerThread in readers)
+                readerThread.Join();
 
             var total = counts.Sum() / 10.0;
             Console.WriteLine($"{mode,-24} readers: {total / 1e6:F2} M lookups/s in total ({total / 3e6:F2} M per thread); writer: {writes / 10.0:N0} changes/s, {compactions} compactions");
@@ -472,17 +501,23 @@ public static class RealDataChecks
         switch (mode)
         {
             case 'i':
-                return () => { long sum = 0; for (var i = 0; i < keys.Length; i++) sum += trie.GetMatchIndex(in keys[i]); return sum; };
+                return () =>
+                {
+                    long sum = 0;
+                    for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
+                        sum += trie.GetMatchIndex(in keys[keyIndex]);
+                    return sum;
+                };
             case 'v':
             {
                 var values = Enumerable.Range(0, trie.ValueCount).Select(trie.GetValue).ToArray();
                 return () =>
                 {
                     long sum = 0;
-                    for (var i = 0; i < keys.Length; i++)
+                    for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
                     {
-                        var at = trie.GetMatchIndex(in keys[i]);
-                        sum += at >= 0 ? values[at] : -1;
+                        var valueIndex = trie.GetMatchIndex(in keys[keyIndex]);
+                        sum += valueIndex >= 0 ? values[valueIndex] : -1;
                     }
                     return sum;
                 };
@@ -495,18 +530,36 @@ public static class RealDataChecks
     private static Func<long> SingleSnapshot<TKey>(RealData.Table<TKey> table, SnapshotTrie<TKey, IPNetwork, int> trie) where TKey : struct, IBitKey<TKey>
     {
         var keys = table.Keys;
-        return () => { long sum = 0; for (var i = 0; i < keys.Length; i++) sum += trie.TryGetMatch(in keys[i], out var p, out var v) ? p.PrefixLength + v : -1; return sum; };
+        return () =>
+        {
+            long sum = 0;
+            for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
+                sum += trie.TryGetMatch(in keys[keyIndex], out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+            return sum;
+        };
     }
 
     private static Func<long> Single<TKey>(RealData.Table<TKey> table, CachedKeyTrie<TKey, IPNetwork, int> trie) where TKey : struct, IBitKey<TKey>
     {
         var keys = table.Keys;
-        return () => { long sum = 0; for (var i = 0; i < keys.Length; i++) sum += trie.TryGetMatch(in keys[i], out var p, out var v) ? p.PrefixLength + v : -1; return sum; };
+        return () =>
+        {
+            long sum = 0;
+            for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
+                sum += trie.TryGetMatch(in keys[keyIndex], out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+            return sum;
+        };
     }
 
     private static Func<long> Single<TKey>(RealData.Table<TKey> table, PooledTrie<TKey, IPNetwork, int> trie) where TKey : struct, IBitKey<TKey>
     {
         var keys = table.Keys;
-        return () => { long sum = 0; for (var i = 0; i < keys.Length; i++) sum += trie.TryGetMatch(in keys[i], out var p, out var v) ? p.PrefixLength + v : -1; return sum; };
+        return () =>
+        {
+            long sum = 0;
+            for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
+                sum += trie.TryGetMatch(in keys[keyIndex], out var prefix, out var value) ? prefix.PrefixLength + value : -1;
+            return sum;
+        };
     }
 }

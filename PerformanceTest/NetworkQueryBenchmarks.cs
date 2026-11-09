@@ -34,15 +34,15 @@ public class RealNetworkQueryBenchmarks
 {
     private sealed record Data(IPNetworkLookup<int> ReadWrite, FrozenIPNetworkLookup<int> Frozen, IPNetwork[] Queries);
 
-    private static readonly Lazy<Data> V4 = new(() => Create(RouteViews.IPv4, 32));
-    private static readonly Lazy<Data> V6 = new(() => Create(RouteViews.IPv6, 128));
+    private static readonly Lazy<Data> IPv4Data = new(() => Create(RouteViews.IPv4, 32));
+    private static readonly Lazy<Data> IPv6Data = new(() => Create(RouteViews.IPv6, 128));
 
     private static Data Create(RouteViews.Table table, int width)
     {
         var lookup = RouteViews.Build(table);
         var random = new Random(7);
         var queries = new IPNetwork[100_000];
-        for (var i = 0; i < queries.Length; i++)
+        for (var queryIndex = 0; queryIndex < queries.Length; queryIndex++)
         {
             var announced = table.Networks[random.Next(table.Networks.Length)];
             var length = Math.Clamp(announced.PrefixLength + random.Next(-8, 9), 0, width);
@@ -51,16 +51,16 @@ public class RealNetworkQueryBenchmarks
             var bits = width == 32 ? IPAddressBits.ToIPv4Bits(announced.BaseAddress) : IPAddressBits.ToIPv6Bits(announced.BaseAddress);
             var noise = ((UInt128)(ulong)random.NextInt64() << 64) | (ulong)random.NextInt64();
             var all = width == 32 ? (UInt128)uint.MaxValue : UInt128.MaxValue;
-            UInt128 Mask(int l) => l == 0 ? UInt128.Zero : all & ~(all >> l);
+            UInt128 Mask(int prefixLength) => prefixLength == 0 ? UInt128.Zero : all & ~(all >> prefixLength);
             bits = ((bits | (noise & ~Mask(announced.PrefixLength))) & Mask(length)) & all;
-            queries[i] = new IPNetwork(width == 32 ? IPAddressBits.FromIPv4Bits((uint)bits) : IPAddressBits.FromIPv6Bits(bits), length);
+            queries[queryIndex] = new IPNetwork(width == 32 ? IPAddressBits.FromIPv4Bits((uint)bits) : IPAddressBits.FromIPv6Bits(bits), length);
         }
 
         return new Data(lookup, lookup.Freeze(), queries);
     }
 
     [GlobalSetup]
-    public void Setup() => _ = (Family == 4 ? V4 : V6).Value;
+    public void Setup() => _ = (Family == 4 ? IPv4Data : IPv6Data).Value;
 
     [ParamsAllValues]
     public bool Frozen { get; set; }
@@ -68,9 +68,9 @@ public class RealNetworkQueryBenchmarks
     [Params(4, 6)]
     public int Family { get; set; }
 
-    private IReadOnlyIPPrefixLookup<IPNetwork, int> Lookup => (Family == 4 ? V4 : V6).Value is var data && Frozen ? data.Frozen : data.ReadWrite;
+    private IReadOnlyIPPrefixLookup<IPNetwork, int> Lookup => (Family == 4 ? IPv4Data : IPv6Data).Value is var data && Frozen ? data.Frozen : data.ReadWrite;
 
-    private IPNetwork[] Queries => (Family == 4 ? V4 : V6).Value.Queries;
+    private IPNetwork[] Queries => (Family == 4 ? IPv4Data : IPv6Data).Value.Queries;
 
     [Benchmark(Baseline = true)]
     public long TryGetMatch()

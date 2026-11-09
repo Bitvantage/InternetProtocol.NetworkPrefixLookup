@@ -39,21 +39,21 @@ public interface IIPPrefixAdapter<TPrefix>
 /// <summary>Dual-stack IP layer over two generic cores: 32-bit keys for IPv4 and 128-bit keys for IPv6.</summary>
 public sealed class IPPrefixLookup<TPrefix, TAdapter, TValue> where TAdapter : struct, IIPPrefixAdapter<TPrefix>
 {
-    private readonly BitTrie<uint, TPrefix, TValue> _v4 = new();
-    private readonly BitTrie<UInt128, TPrefix, TValue> _v6 = new();
+    private readonly BitTrie<uint, TPrefix, TValue> _ipv4Trie = new();
+    private readonly BitTrie<UInt128, TPrefix, TValue> _ipv6Trie = new();
 
-    public BitTrie<uint, TPrefix, TValue> V4 => _v4;
+    public BitTrie<uint, TPrefix, TValue> V4 => _ipv4Trie;
 
     public bool TryAdd(TPrefix prefix, TValue value) =>
         TAdapter.IsIPv4(prefix)
-            ? _v4.TryAdd(TAdapter.GetIPv4Bits(prefix), TAdapter.GetLength(prefix), prefix, value)
-            : _v6.TryAdd(TAdapter.GetIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, value);
+            ? _ipv4Trie.TryAdd(TAdapter.GetIPv4Bits(prefix), TAdapter.GetLength(prefix), prefix, value)
+            : _ipv6Trie.TryAdd(TAdapter.GetIPv6Bits(prefix), TAdapter.GetLength(prefix), prefix, value);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetMatch(IPAddress address, out TPrefix prefix, out TValue value) =>
         address.AddressFamily == AddressFamily.InterNetwork
-            ? _v4.TryGetMatch(IPBits.V4(address), out prefix, out value)
-            : _v6.TryGetMatch(IPBits.V6(address), out prefix, out value);
+            ? _ipv4Trie.TryGetMatch(IPBits.V4(address), out prefix, out value)
+            : _ipv6Trie.TryGetMatch(IPBits.V6(address), out prefix, out value);
 }
 
 /// <summary>Allocation-free conversion of IP addresses to left-aligned integers.</summary>
@@ -100,16 +100,16 @@ public struct IPNetworkAdapter : IIPPrefixAdapter<IPNetwork>
 /// </summary>
 public sealed class UInt128Control<TValue>
 {
-    private readonly BitTrie<UInt128, NetworkPrefix, TValue> _v4 = new();
+    private readonly BitTrie<UInt128, NetworkPrefix, TValue> _ipv4Trie = new();
 
-    public BitTrie<UInt128, NetworkPrefix, TValue> V4 => _v4;
+    public BitTrie<UInt128, NetworkPrefix, TValue> V4 => _ipv4Trie;
 
     public bool TryAdd(NetworkPrefix prefix, TValue value) =>
-        _v4.TryAdd(prefix.NetworkBits << (128 - prefix.AddressLength), prefix.Length, prefix, value);
+        _ipv4Trie.TryAdd(prefix.NetworkBits << (128 - prefix.AddressLength), prefix.Length, prefix, value);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetMatch(IPAddress address, out NetworkPrefix prefix, out TValue value) =>
-        _v4.TryGetMatch(ToUInt128(address) << 96, out prefix, out value);
+        _ipv4Trie.TryGetMatch(ToUInt128(address) << 96, out prefix, out value);
 
     // copied from NetworkPrefixLookupBase.ToUInt128 (IPv4 branch), including its allocations
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

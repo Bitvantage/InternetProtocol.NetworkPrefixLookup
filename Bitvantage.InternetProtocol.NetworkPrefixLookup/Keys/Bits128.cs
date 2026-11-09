@@ -63,13 +63,13 @@ public readonly struct Bits128 : IBitKey<Bits128>, IEquatable<Bits128>
     static int IBitKey<Bits128>.GetTopBits(in Bits128 key, int count) => (int)(ulong)(key.Value >> (128 - count));
 
     /// <inheritdoc />
-    static int IBitKey<Bits128>.Compare(in Bits128 a, in Bits128 b) => a.Value.CompareTo(b.Value);
+    static int IBitKey<Bits128>.Compare(in Bits128 left, in Bits128 right) => left.Value.CompareTo(right.Value);
 
     /// <inheritdoc />
     public bool Equals(Bits128 other) => Value == other.Value;
 
     /// <inheritdoc />
-    public override bool Equals(object? obj) => obj is Bits128 other && Equals(other);
+    public override bool Equals(object? other) => other is Bits128 otherKey && Equals(otherKey);
 
     /// <inheritdoc />
     public override int GetHashCode() => Value.GetHashCode();

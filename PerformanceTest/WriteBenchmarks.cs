@@ -26,18 +26,18 @@ namespace PerformanceTest;
 [MemoryDiagnoser]
 public class WriteBenchmarks
 {
-    private IPNetworkLookup<int> _v4 = null!;
+    private IPNetworkLookup<int> _ipv4Lookup = null!;
     private IPNetwork[] _churn = null!;
     private int[] _churnAsns = null!;
 
     [GlobalSetup]
     public void Setup()
     {
-        _v4 = RouteViews.Build(RouteViews.IPv4);
+        _ipv4Lookup = RouteViews.Build(RouteViews.IPv4);
         // every 1,000th prefix of the table, removed and added back
         var table = RouteViews.IPv4;
-        _churn = table.Networks.Where((_, i) => i % 1000 == 0).ToArray();
-        _churnAsns = table.Asns.Where((_, i) => i % 1000 == 0).ToArray();
+        _churn = table.Networks.Where((_, networkIndex) => networkIndex % 1000 == 0).ToArray();
+        _churnAsns = table.Asns.Where((_, asnIndex) => asnIndex % 1000 == 0).ToArray();
     }
 
     /// <summary>One batch that removes 10 prefixes and adds them back.</summary>
@@ -46,9 +46,11 @@ public class WriteBenchmarks
     {
         for (var round = 0; round < 100; round++)
         {
-            using var batch = _v4.BeginBatch();
-            for (var i = 0; i < 10; i++) _v4.Remove(_churn[i]);
-            for (var i = 0; i < 10; i++) _v4.Add(_churn[i], _churnAsns[i]);
+            using var batch = _ipv4Lookup.BeginBatch();
+            for (var churnIndex = 0; churnIndex < 10; churnIndex++)
+                _ipv4Lookup.Remove(_churn[churnIndex]);
+            for (var churnIndex = 0; churnIndex < 10; churnIndex++)
+                _ipv4Lookup.Add(_churn[churnIndex], _churnAsns[churnIndex]);
             batch.Commit();
         }
     }
@@ -57,7 +59,9 @@ public class WriteBenchmarks
     [Benchmark]
     public void SingleWrites()
     {
-        for (var i = 0; i < _churn.Length; i++) _v4.Remove(_churn[i]);
-        for (var i = 0; i < _churn.Length; i++) _v4.Add(_churn[i], _churnAsns[i]);
+        for (var churnIndex = 0; churnIndex < _churn.Length; churnIndex++)
+            _ipv4Lookup.Remove(_churn[churnIndex]);
+        for (var churnIndex = 0; churnIndex < _churn.Length; churnIndex++)
+            _ipv4Lookup.Add(_churn[churnIndex], _churnAsns[churnIndex]);
     }
 }

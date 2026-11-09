@@ -64,13 +64,13 @@ public readonly struct Bits32 : IBitKey<Bits32>, IEquatable<Bits32>
     static int IBitKey<Bits32>.GetTopBits(in Bits32 key, int count) => (int)(key.Value >> (32 - count));
 
     /// <inheritdoc />
-    static int IBitKey<Bits32>.Compare(in Bits32 a, in Bits32 b) => a.Value.CompareTo(b.Value);
+    static int IBitKey<Bits32>.Compare(in Bits32 left, in Bits32 right) => left.Value.CompareTo(right.Value);
 
     /// <inheritdoc />
     public bool Equals(Bits32 other) => Value == other.Value;
 
     /// <inheritdoc />
-    public override bool Equals(object? obj) => obj is Bits32 other && Equals(other);
+    public override bool Equals(object? other) => other is Bits32 otherKey && Equals(otherKey);
 
     /// <inheritdoc />
     public override int GetHashCode() => Value.GetHashCode();

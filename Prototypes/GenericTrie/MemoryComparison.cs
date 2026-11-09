@@ -53,16 +53,36 @@ public static class MemoryComparison
 
         // random IPv4 benchmark data: NetworkPrefix inputs already exist in Data.Prefixes
         Report("Random IPv4, 96,944 prefixes", Data.Prefixes.Count, Data.Prefixes,
-            () => { var l = new NetworkPrefixLookup<string>(); foreach (var p in Data.Prefixes) l.TryAdd(p, string.Empty); return l; },
+            () =>
+            {
+                var lookup = new NetworkPrefixLookup<string>();
+                foreach (var networkPrefix in Data.Prefixes)
+                    lookup.TryAdd(networkPrefix, string.Empty);
+                return lookup;
+            },
             Optimization.BuildCached,
-            trim => { var t = Optimization.BuildPooled(); if (trim) t.TrimExcess(); return t; },
-            (trim, bits) => { var t = Optimization.BuildPooled(NodeOrder.DepthFirst, bits); if (trim) t.TrimExcess(); return t; },
+            trim =>
+            {
+                var trie = Optimization.BuildPooled();
+                if (trim)
+                    trie.TrimExcess();
+                return trie;
+            },
+            (trim, bits) =>
+            {
+                var trie = Optimization.BuildPooled(NodeOrder.DepthFirst, bits);
+                if (trim)
+                    trie.TrimExcess();
+                return trie;
+            },
             16);
 
         foreach (var (name, table, bits) in new (string, object, int)[] { ("Real IPv4", RealData.V4, 20), ("Real IPv6", RealData.V6, 20) })
         {
-            if (table is RealData.Table<Bits32> v4) ReportReal(name, v4, bits);
-            else ReportReal(name, (RealData.Table<Bits128>)table, bits);
+            if (table is RealData.Table<Bits32> ipv4Table)
+                ReportReal(name, ipv4Table, bits);
+            else
+                ReportReal(name, (RealData.Table<Bits128>)table, bits);
         }
     }
 
@@ -74,27 +94,42 @@ public static class MemoryComparison
         {
             var bytes = Retained(() =>
             {
-                var t = new SnapshotTrie<TKey, IPNetwork, int>(width, 16, 8, threshold);
-                t.BeginBulkLoad();
-                for (var i = 0; i < table.Bits.Length; i++) t.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-                t.EndBulkLoad();
-                return t;
+                var trie = new SnapshotTrie<TKey, IPNetwork, int>(width, 16, 8, threshold);
+                trie.BeginBulkLoad();
+                for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+                    trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+                trie.EndBulkLoad();
+                return trie;
             });
             Console.WriteLine($"| {name}, {count:N0} prefixes | SnapshotTrie, bulk loaded, multi-level 16/8/{threshold} | {bytes / 1048576.0:F1} MB | {bytes / (double)count:F0} |");
         }
 
-        var prefixes = table.Networks.Select(n => new NetworkPrefix(n.BaseAddress, n.PrefixLength)).ToArray();
+        var prefixes = table.Networks.Select(network => new NetworkPrefix(network.BaseAddress, network.PrefixLength)).ToArray();
         Report($"{name}, {table.Bits.Length:N0} prefixes", table.Bits.Length, prefixes,
-            () => { var l = new NetworkPrefixLookup<int>(); for (var i = 0; i < prefixes.Length; i++) l.TryAdd(prefixes[i], table.Asns[i]); return l; },
+            () =>
+            {
+                var lookup = new NetworkPrefixLookup<int>();
+                for (var prefixIndex = 0; prefixIndex < prefixes.Length; prefixIndex++)
+                    lookup.TryAdd(prefixes[prefixIndex], table.Asns[prefixIndex]);
+                return lookup;
+            },
             () => RealDataChecks.BuildCached(table),
             trim =>
             {
-                var t = new PooledTrie<TKey, IPNetwork, int>();
-                for (var i = 0; i < table.Bits.Length; i++) t.TryAdd(in table.Bits[i], table.Lengths[i], table.Networks[i], table.Asns[i]);
-                if (trim) t.TrimExcess();
-                return t;
+                var trie = new PooledTrie<TKey, IPNetwork, int>();
+                for (var prefixIndex = 0; prefixIndex < table.Bits.Length; prefixIndex++)
+                    trie.TryAdd(in table.Bits[prefixIndex], table.Lengths[prefixIndex], table.Networks[prefixIndex], table.Asns[prefixIndex]);
+                if (trim)
+                    trie.TrimExcess();
+                return trie;
             },
-            (trim, indexBits) => { var t = RealDataChecks.BuildPooled(table, indexBits); if (trim) t.TrimExcess(); return t; },
+            (trim, indexBits) =>
+            {
+                var trie = RealDataChecks.BuildPooled(table, indexBits);
+                if (trim)
+                    trie.TrimExcess();
+                return trie;
+            },
             bits);
     }
 

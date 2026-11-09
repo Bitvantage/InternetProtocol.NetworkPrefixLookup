@@ -32,7 +32,7 @@ public class RandomTableBenchmarks
     private static readonly List<IPNetwork> Networks = CreateNetworks();
     private static readonly List<IPAddress> Addresses = CreateAddresses();
     private static readonly uint[] AddressBits = Addresses.Select(IPAddressBits.ToIPv4Bits).ToArray();
-    private static readonly IPNetworkLookup<string> Lookup = new(Networks.Select(n => KeyValuePair.Create(n, string.Empty)));
+    private static readonly IPNetworkLookup<string> Lookup = new(Networks.Select(network => KeyValuePair.Create(network, string.Empty)));
     private static readonly FrozenIPNetworkLookup<string> Frozen = Lookup.Freeze(new FrozenBitTrieOptions { Layout = FrozenLayout.LeafPushed });
     private static readonly FrozenIPNetworkLookup<string> FrozenCompressed = Lookup.Freeze(new FrozenBitTrieOptions { Layout = FrozenLayout.Compressed });
 
@@ -47,7 +47,8 @@ public class RandomTableBenchmarks
     {
         var found = 0;
         foreach (var address in Addresses)
-            if (Lookup.TryGetMatch(address, out _, out _)) found++;
+            if (Lookup.TryGetMatch(address, out _, out _))
+                found++;
         return found;
     }
 
@@ -56,7 +57,8 @@ public class RandomTableBenchmarks
     {
         var found = 0;
         foreach (var address in Addresses)
-            if (Frozen.TryGetMatch(address, out _, out _)) found++;
+            if (Frozen.TryGetMatch(address, out _, out _))
+                found++;
         return found;
     }
 
@@ -66,7 +68,8 @@ public class RandomTableBenchmarks
     {
         var found = 0;
         foreach (var address in Addresses)
-            if (FrozenCompressed.TryGetMatch(address, out _, out _)) found++;
+            if (FrozenCompressed.TryGetMatch(address, out _, out _))
+                found++;
         return found;
     }
 
@@ -75,7 +78,8 @@ public class RandomTableBenchmarks
     {
         var found = 0;
         foreach (var address in AddressBits)
-            if (Lookup.TryGetMatchIPv4(address, out _, out _)) found++;
+            if (Lookup.TryGetMatchIPv4(address, out _, out _))
+                found++;
         return found;
     }
 
@@ -84,7 +88,8 @@ public class RandomTableBenchmarks
     {
         var found = 0;
         foreach (var address in AddressBits)
-            if (Frozen.TryGetMatchIPv4(address, out _, out _)) found++;
+            if (Frozen.TryGetMatchIPv4(address, out _, out _))
+                found++;
         return found;
     }
 

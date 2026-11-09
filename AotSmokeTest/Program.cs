@@ -23,10 +23,11 @@ using Bitvantage.InternetProtocol.NetworkPrefixLookup;
 // Exercises each package once, published with native AOT: every check must hold, or the process exits with 1. A
 // trimming or AOT warning in the libraries already fails the publish, since the project treats warnings as errors.
 var failures = 0;
-void Check(bool condition, string what)
+void Check(bool condition, string checkName)
 {
-    if (condition) return;
-    Console.Error.WriteLine($"FAILED: {what}");
+    if (condition)
+        return;
+    Console.Error.WriteLine($"FAILED: {checkName}");
     failures++;
 }
 
@@ -55,12 +56,12 @@ Check(trie.Freeze().TryGetMatch(new Bits32(0x0A010203), out var prefix, out _) &
 
 // the IPNetwork2 package
 var ipNetwork2 = new IPNetwork2Lookup<int> { { System.Net.IPNetwork2.Parse("192.0.2.0/24"), 4 } };
-Check(ipNetwork2.Freeze().TryGetMatchValue(IPAddress.Parse("192.0.2.9"), out var asn) && asn == 4, "IPNetwork2Lookup");
+Check(ipNetwork2.Freeze().TryGetMatchValue(IPAddress.Parse("192.0.2.9"), out var matchedValue) && matchedValue == 4, "IPNetwork2Lookup");
 
 // the MaxMind package: the loader decodes records with MaxMind.Db, whose own AOT support decides whether this works
 var path = Path.Combine(AppContext.BaseDirectory, "GeoIP2-Country-Test.mmdb");
 var countries = MaxMindDatabase.Load<Dictionary<string, object>>(path);
-Check(countries.Count > 0 && countries.Any(e => e.Prefix.NetworkAddress.AddressFamily == AddressFamily.InterNetworkV6), "MaxMindDatabase.Load");
+Check(countries.Count > 0 && countries.Any(entry => entry.Prefix.NetworkAddress.AddressFamily == AddressFamily.InterNetworkV6), "MaxMindDatabase.Load");
 
 Console.WriteLine(failures == 0 ? "All checks passed." : $"{failures} checks failed.");
 return failures == 0 ? 0 : 1;

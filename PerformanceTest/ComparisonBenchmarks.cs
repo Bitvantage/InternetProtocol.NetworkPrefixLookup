@@ -41,7 +41,7 @@ public class ComparisonBenchmarks
     private FrozenIPNetworkLookup<int> _frozen = null!;
 
     /// <summary>A table's prefixes as <see cref="IPNetwork" /> values; version 2 makes its own NetworkPrefix objects.</summary>
-    public static IPNetwork[] Networks(ComparisonData.Table data) => data.Prefixes.Select(p => new IPNetwork(p.Address, p.Length)).ToArray();
+    public static IPNetwork[] Networks(ComparisonData.Table data) => data.Prefixes.Select(prefix => new IPNetwork(prefix.Address, prefix.Length)).ToArray();
 
     [GlobalSetup]
     public void Setup()
@@ -55,10 +55,10 @@ public class ComparisonBenchmarks
     private IPNetworkLookup<int> Build(bool batch)
     {
         var lookup = new IPNetworkLookup<int>();
-        var b = batch ? lookup.BeginBatch() : null;
-        for (var i = 0; i < _networks.Length; i++)
-            lookup.TryAdd(_networks[i], _data.Values[i]);
-        b?.Commit();
+        var writeBatch = batch ? lookup.BeginBatch() : null;
+        for (var networkIndex = 0; networkIndex < _networks.Length; networkIndex++)
+            lookup.TryAdd(_networks[networkIndex], _data.Values[networkIndex]);
+        writeBatch?.Commit();
         return lookup;
     }
 

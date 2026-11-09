@@ -49,7 +49,7 @@ public class IPNetworkLookupTests
     private static string? Match(IReadOnlyIPPrefixLookup<IPNetwork, string> lookup, string address) =>
         lookup.TryGetMatch(IPAddress.Parse(address), out _, out var value) ? value : null;
 
-    private static string[] Values(IEnumerable<PrefixEntry<IPNetwork, string>> entries) => entries.Select(e => e.Value).ToArray();
+    private static string[] Values(IEnumerable<PrefixEntry<IPNetwork, string>> entries) => entries.Select(entry => entry.Value).ToArray();
 
     [Test(Description = "v2 Add_IPv4_01: nested and adjacent IPv4 prefixes")]
     public void Nested_IPv4_prefixes_give_the_longest_match()
@@ -66,9 +66,9 @@ public class IPNetworkLookupTests
             Assert.That(Match(form, "10.20.200.1"), Is.EqualTo("10.20.0.0/16"));
             Assert.That(Match(form, "200.20.1.1"), Is.EqualTo("200.20.0.0/16"));
             Assert.That(Match(form, "10.21.0.0"), Is.Null);
-            Assert.That(form.GetMatches(IPAddress.Parse("10.20.30.3")).Select(e => e.Value),
+            Assert.That(form.GetMatches(IPAddress.Parse("10.20.30.3")).Select(entry => entry.Value),
                 Is.EqualTo(new[] { "10.20.30.3/32", "10.20.30.0/24", "10.20.30.0/23", "10.20.16.0/20", "10.20.0.0/16" }));
-            Assert.That(form.Select(e => e.Value), Is.EqualTo(new[]
+            Assert.That(form.Select(entry => entry.Value), Is.EqualTo(new[]
             {
                 "10.20.0.0/16", "10.20.16.0/20", "10.20.30.0/23", "10.20.30.0/24", "10.20.30.0/32", "10.20.30.1/32", "10.20.30.2/32",
                 "10.20.30.3/32", "10.20.30.4/32", "10.20.30.5/32", "10.20.31.0/24", "200.20.0.0/16"
@@ -95,8 +95,8 @@ public class IPNetworkLookupTests
             Assert.That(Lookup(set.Reverse().ToArray()).ToTextTree(AddressFamily.InterNetwork), Is.EqualTo(expected), string.Join(", ", set));
             foreach (var network in set)
             {
-                var n = N(network);
-                Assert.That(Match(Lookup(set), n.BaseAddress.ToString()), Is.EqualTo(set.Where(s => N(s).Contains(n.BaseAddress)).OrderByDescending(s => N(s).PrefixLength).First()));
+                var parsedNetwork = N(network);
+                Assert.That(Match(Lookup(set), parsedNetwork.BaseAddress.ToString()), Is.EqualTo(set.Where(candidate => N(candidate).Contains(parsedNetwork.BaseAddress)).OrderByDescending(candidate => N(candidate).PrefixLength).First()));
             }
         }
 
@@ -111,11 +111,11 @@ public class IPNetworkLookupTests
         var random = new Random(55);
         var networks = Enumerable.Range(0, 20000)
             .Select(_ => new IPNetwork(new IPAddress(random.NextInt64(0, 1L << 32)), (int)Math.Cbrt(random.Next(0, 33 * 33 * 33))))
-            .Select(n => new IPNetwork(IPAddressBits.FromIPv4Bits(IPAddressBits.ToIPv4Bits(n.BaseAddress) & (uint)(0xFFFFFFFF00000000UL >> n.PrefixLength)), n.PrefixLength))
+            .Select(randomNetwork => new IPNetwork(IPAddressBits.FromIPv4Bits(IPAddressBits.ToIPv4Bits(randomNetwork.BaseAddress) & (uint)(0xFFFFFFFF00000000UL >> randomNetwork.PrefixLength)), randomNetwork.PrefixLength))
             .Distinct().Take(10000).ToList();
         var keep = networks.Take(8000).ToList();
 
-        var expected = new IPNetworkLookup<int>(keep.Select(n => KeyValuePair.Create(n, 0))).ToTextTree(AddressFamily.InterNetwork);
+        var expected = new IPNetworkLookup<int>(keep.Select(keptNetwork => KeyValuePair.Create(keptNetwork, 0))).ToTextTree(AddressFamily.InterNetwork);
         var lookup = new IPNetworkLookup<int>();
         foreach (var network in networks.OrderBy(_ => random.Next()))
             lookup.Add(network, 0);
@@ -286,8 +286,8 @@ public class IPNetworkLookupTests
     public void Collection_initializers_fill_a_lookup()
     {
         var routes = new IPNetworkLookup<int> { { N("10.0.0.0/8"), 64512 }, { N("2001:db8::/32"), 64513 } };
-        Assert.That(routes.TryGetMatchValue(IPAddress.Parse("10.1.2.3"), out var asn) && asn == 64512);
-        Assert.That(routes.TryGetMatchValue(IPAddress.Parse("2001:db8::1"), out asn) && asn == 64513);
+        Assert.That(routes.TryGetMatchValue(IPAddress.Parse("10.1.2.3"), out var autonomousSystemNumber) && autonomousSystemNumber == 64512);
+        Assert.That(routes.TryGetMatchValue(IPAddress.Parse("2001:db8::1"), out autonomousSystemNumber) && autonomousSystemNumber == 64513);
 
         var blocked = new IPNetworkLookup<NoValue> { N("192.0.2.0/24"), N("2001:db8::/32") };
         Assert.That(blocked.ContainsMatch(IPAddress.Parse("192.0.2.7")) && blocked.Count == 2);
@@ -339,14 +339,14 @@ public class IPNetworkLookupTests
             Assert.That(form.TryGetMatchValue(IPAddress.Parse("10.1.9.9"), out value) && value == "10.1.0.0/16");
             Assert.That(form.TryGetMatchValue(new byte[] { 10, 9, 9, 9 }, out value) && value == "10.0.0.0/8");
 
-            var v6 = IPAddress.Parse("2001:db8::1").GetAddressBytes();
-            Assert.That(form.TryGetMatch(v6, out _, out value) && value == "2001:db8::/32");
+            var ipv6Bytes = IPAddress.Parse("2001:db8::1").GetAddressBytes();
+            Assert.That(form.TryGetMatch(ipv6Bytes, out _, out value) && value == "2001:db8::/32");
             Assert.That(form.TryGetMatchIPv6(IPAddressBits.ToIPv6Bits(IPAddress.Parse("2001:db8::1")), out _, out value) && value == "2001:db8::/32");
             Assert.That(form.TryGetMatchValueIPv6(IPAddressBits.ToIPv6Bits(IPAddress.Parse("2001:db8::1")), out value) && value == "2001:db8::/32");
 
             Assert.That(form.ContainsMatch(IPAddress.Parse("10.9.9.9")) && form.ContainsMatch(new byte[] { 10, 9, 9, 9 }) && form.ContainsMatchIPv4(0x0A090909));
             Assert.That(form.ContainsMatch(IPAddress.Parse("11.9.9.9")) || form.ContainsMatch(new byte[] { 11, 9, 9, 9 }) || form.ContainsMatchIPv4(0x0B090909), Is.False);
-            Assert.That(form.ContainsMatch(IPAddress.Parse("2001:db8::1")) && form.ContainsMatch(v6) && form.ContainsMatchIPv6(IPAddressBits.ToIPv6Bits(IPAddress.Parse("2001:db8::1"))));
+            Assert.That(form.ContainsMatch(IPAddress.Parse("2001:db8::1")) && form.ContainsMatch(ipv6Bytes) && form.ContainsMatchIPv6(IPAddressBits.ToIPv6Bits(IPAddress.Parse("2001:db8::1"))));
             Assert.That(form.ContainsMatchIPv6(IPAddressBits.ToIPv6Bits(IPAddress.Parse("2001:db9::1"))), Is.False);
 
             Assert.Throws<ArgumentException>(() => form.TryGetMatch(new byte[5], out _, out _));
@@ -406,7 +406,7 @@ public class IPNetworkLookupTests
             Assert.That(Match(form, "::ffff:10.1.2.3"), Is.EqualTo("10.0.0.0/8"));
             Assert.That(form.TryGetMatch(mapped.GetAddressBytes(), out _, out var value) && value == "10.0.0.0/8");
             Assert.That(form.TryGetMatchIPv6(IPAddressBits.ToIPv6Bits(mapped), out _, out value) && value == "10.0.0.0/8");
-            Assert.That(form.GetMatches(mapped).Select(m => m.Value), Is.EqualTo(new[] { "10.0.0.0/8" }));
+            Assert.That(form.GetMatches(mapped).Select(entry => entry.Value), Is.EqualTo(new[] { "10.0.0.0/8" }));
             Assert.That(Values(form.GetMatches(mapped.GetAddressBytes())), Is.EqualTo(new[] { "10.0.0.0/8" }));
             Assert.That(Values(form.GetMatchesIPv6(IPAddressBits.ToIPv6Bits(mapped))), Is.EqualTo(new[] { "10.0.0.0/8" }));
             Assert.That(form.ContainsMatch(mapped) && form.ContainsMatch(mapped.GetAddressBytes()) && form.ContainsMatchIPv6(IPAddressBits.ToIPv6Bits(mapped)));
@@ -428,7 +428,7 @@ public class IPNetworkLookupTests
     {
         var random = new Random(41);
         var networks = new List<IPNetwork>();
-        for (var i = 0; i < 4000; i++)
+        for (var pairIndex = 0; pairIndex < 4000; pairIndex++)
         {
             var length = random.Next(0, 33);
             networks.Add(new IPNetwork(IPAddressBits.FromIPv4Bits(length == 0 ? 0 : (uint)random.NextInt64(1L << 32) & (uint.MaxValue << (32 - length))), length));
@@ -439,14 +439,14 @@ public class IPNetworkLookupTests
 
         networks = networks.Distinct().ToList();
         var oneByOne = new IPNetworkLookup<int>();
-        for (var i = 0; i < networks.Count; i++)
-            oneByOne.Add(networks[i], i);
-        var built = new IPNetworkLookup<int>(networks.Select((n, i) => KeyValuePair.Create(n, i)));
+        for (var networkIndex = 0; networkIndex < networks.Count; networkIndex++)
+            oneByOne.Add(networks[networkIndex], networkIndex);
+        var built = new IPNetworkLookup<int>(networks.Select((network, networkIndex) => KeyValuePair.Create(network, networkIndex)));
 
         Assert.That(built.Count, Is.EqualTo(networks.Count));
         foreach (var family in new[] { AddressFamily.InterNetwork, AddressFamily.InterNetworkV6 })
             Assert.That(built.ToTextTree(family), Is.EqualTo(oneByOne.ToTextTree(family)), family.ToString());
-        Assert.That(built.Select(e => e.Value), Is.EqualTo(oneByOne.Select(e => e.Value)), "enumeration");
+        Assert.That(built.Select(entry => entry.Value), Is.EqualTo(oneByOne.Select(entry => entry.Value)), "enumeration");
 
         Assert.Throws<ArgumentException>(() => _ = new IPNetworkLookup<int>(new[] { KeyValuePair.Create(N("10.0.0.0/8"), 1), KeyValuePair.Create(N("10.0.0.0/8"), 2) }));
         Assert.Throws<ArgumentException>(() => _ = new IPNetworkLookup<int>(new[] { KeyValuePair.Create(N("::ffff:10.0.0.0/104"), 1) }, new IPLookupOptions { MapIPv4MappedAddresses = true }));
@@ -509,7 +509,7 @@ public class IPNetworkLookupTests
     public void A_commit_whose_IPv4_half_throws_publishes_nothing()
     {
         var lookup = Lookup("10.0.0.0/8");
-        var restore = Test.Core.CommitFaults.BreakNextCommit(Test.Core.CommitFaults.Field(lookup, "_v4"));
+        var restore = Test.Core.CommitFaults.BreakNextCommit(Test.Core.CommitFaults.Field(lookup, "_ipv4Trie"));
         var batch = lookup.BeginBatch();
         lookup.Add(N("10.1.0.0/16"), "10.1.0.0/16");
         lookup.Add(N("10.2.0.0/16"), "10.2.0.0/16");
@@ -548,7 +548,7 @@ public class IPNetworkLookupTests
         {
             lookup.Add(N("11.0.0.0/8"), "11.0.0.0/8");
             lookup.Add(N("2001:db9::/32"), "2001:db9::/32");
-            Test.Core.CommitFaults.FailBatch(Test.Core.CommitFaults.Field(lookup, "_v6"));
+            Test.Core.CommitFaults.FailBatch(Test.Core.CommitFaults.Field(lookup, "_ipv6Trie"));
             Assert.Throws<InvalidOperationException>(() => batch.Commit());
         }
 
@@ -567,11 +567,11 @@ public class IPNetworkLookupTests
         var stop = false;
         var writer = new Thread(() =>
         {
-            for (var i = 1; !Volatile.Read(ref stop); i++)
+            for (var batchNumber = 1; !Volatile.Read(ref stop); batchNumber++)
             {
                 using var batch = lookup.BeginBatch();
-                lookup.AddOrUpdate(N("10.0.0.0/8"), i);
-                lookup.AddOrUpdate(N("2001:db8::/32"), i);
+                lookup.AddOrUpdate(N("10.0.0.0/8"), batchNumber);
+                lookup.AddOrUpdate(N("2001:db8::/32"), batchNumber);
                 batch.Commit();
             }
         }) { IsBackground = true };
@@ -584,9 +584,10 @@ public class IPNetworkLookupTests
             while (clock.ElapsedMilliseconds < 1000)
             {
                 var frozen = lookup.Freeze();
-                frozen.TryGetMatchValueIPv4(0x0A000001, out var ipv4);
-                frozen.TryGetMatchValue(IPAddress.Parse("2001:db8::1"), out var ipv6);
-                if (ipv4 != ipv6) mixed++;
+                frozen.TryGetMatchValueIPv4(0x0A000001, out var ipv4Value);
+                frozen.TryGetMatchValue(IPAddress.Parse("2001:db8::1"), out var ipv6Value);
+                if (ipv4Value != ipv6Value)
+                    mixed++;
                 copies++;
             }
         }
@@ -604,10 +605,10 @@ public class IPNetworkLookupTests
     {
         var lookup = new IPNetworkLookup<int>();
         var random = new Random(31);
-        for (var i = 0; i < 2000; i++)
+        for (var routeIndex = 0; routeIndex < 2000; routeIndex++)
         {
-            lookup.TryAdd(new IPNetwork(IPAddressBits.FromIPv4Bits((uint)random.Next()), 32), i);
-            lookup.TryAdd(new IPNetwork(IPAddressBits.FromIPv6Bits(((UInt128)(ulong)random.NextInt64() << 64) | (ulong)random.NextInt64()), 128), i);
+            lookup.TryAdd(new IPNetwork(IPAddressBits.FromIPv4Bits((uint)random.Next()), 32), routeIndex);
+            lookup.TryAdd(new IPNetwork(IPAddressBits.FromIPv6Bits(((UInt128)(ulong)random.NextInt64() << 64) | (ulong)random.NextInt64()), 128), routeIndex);
         }
 
         var compressed = new FrozenBitTrieOptions { Layout = FrozenLayout.Compressed };
@@ -673,7 +674,8 @@ public class IPNetworkLookupTests
         for (var length = 0; length <= 31; length++)
         {
             networks.Add(new IPNetwork(IPAddress.Any, length));
-            if (length > 0) networks.Add(new IPNetwork(IPAddressBits.FromIPv4Bits(1u << (32 - length)), length));
+            if (length > 0)
+                networks.Add(new IPNetwork(IPAddressBits.FromIPv4Bits(1u << (32 - length)), length));
         }
 
         lookup.Add(N("0.0.0.0/32"), "Success");

@@ -33,53 +33,53 @@ public static class RouteViews
     public sealed record Table(IPNetwork[] Networks, int[] Asns, UInt128[] Keys, IPAddress[] Addresses)
     {
         // IPv4 keys as 4-byte integers, so that a benchmark loop streams 4 MB of keys instead of 16 MB
-        public uint[] IPv4Keys { get; } = Keys.Select(k => (uint)k).ToArray();
+        public uint[] IPv4Keys { get; } = Keys.Select(key => (uint)key).ToArray();
     }
 
-    private static readonly Lazy<Table> V4 = new(() => Load("rv2", 32));
-    private static readonly Lazy<Table> V6 = new(() => Load("rv6", 128));
+    private static readonly Lazy<Table> IPv4Table = new(() => Load("rv2", 32));
+    private static readonly Lazy<Table> IPv6Table = new(() => Load("rv6", 128));
 
-    public static bool Available => Environment.GetEnvironmentVariable("ROUTEVIEWS_DIR") is { Length: > 0 } dir && Directory.Exists(dir);
+    public static bool Available => Environment.GetEnvironmentVariable("ROUTEVIEWS_DIR") is { Length: > 0 } directoryPath && Directory.Exists(directoryPath);
 
-    public static Table IPv4 => V4.Value;
+    public static Table IPv4 => IPv4Table.Value;
 
-    public static Table IPv6 => V6.Value;
+    public static Table IPv6 => IPv6Table.Value;
 
     public static IPNetworkLookup<int> Build(Table table)
     {
         var lookup = new IPNetworkLookup<int>();
         using var batch = lookup.BeginBatch();
-        for (var i = 0; i < table.Networks.Length; i++)
-            lookup.TryAdd(table.Networks[i], table.Asns[i]);
+        for (var networkIndex = 0; networkIndex < table.Networks.Length; networkIndex++)
+            lookup.TryAdd(table.Networks[networkIndex], table.Asns[networkIndex]);
         batch.Commit();
         return lookup;
     }
 
     private static Table Load(string kind, int width)
     {
-        var sw = Stopwatch.StartNew();
+        var stopwatch = Stopwatch.StartNew();
         var (file, rows) = ComparisonData.ReadRouteViews(kind, width);
-        var bits = rows.Select(r => r.Bits).ToList();
-        var lengths = rows.Select(r => r.Length).ToList();
-        var networks = rows.Select(r => new IPNetwork(ToAddress(r.Bits, width), r.Length)).ToList();
-        var asns = rows.Select(r => r.Asn).ToList();
+        var bits = rows.Select(row => row.Bits).ToList();
+        var lengths = rows.Select(row => row.Length).ToList();
+        var networks = rows.Select(row => new IPNetwork(ToAddress(row.Bits, width), row.Length)).ToList();
+        var asns = rows.Select(row => row.Asn).ToList();
 
         // the prototype's keys: a random announced prefix, then random bits for the rest of the address
         var random = new Random(42);
         var keys = new UInt128[1_000_000];
         var addresses = new IPAddress[keys.Length];
         var noise = new byte[width / 8];
-        for (var i = 0; i < keys.Length; i++)
+        for (var keyIndex = 0; keyIndex < keys.Length; keyIndex++)
         {
-            var p = random.Next(bits.Count);
+            var prefixIndex = random.Next(bits.Count);
             random.NextBytes(noise);
             var host = width == 32 ? (UInt128)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(noise) : System.Buffers.Binary.BinaryPrimitives.ReadUInt128BigEndian(noise);
-            var mask = Mask(lengths[p], width);
-            keys[i] = (bits[p] & mask) | (host & ~mask & Mask(width, width));
-            addresses[i] = ToAddress(keys[i], width);
+            var mask = Mask(lengths[prefixIndex], width);
+            keys[keyIndex] = (bits[prefixIndex] & mask) | (host & ~mask & Mask(width, width));
+            addresses[keyIndex] = ToAddress(keys[keyIndex], width);
         }
 
-        Console.Error.WriteLine($"loaded {bits.Count:N0} {kind} prefixes from {Path.GetFileName(file)} in {sw.Elapsed.TotalSeconds:F1} s");
+        Console.Error.WriteLine($"loaded {bits.Count:N0} {kind} prefixes from {Path.GetFileName(file)} in {stopwatch.Elapsed.TotalSeconds:F1} s");
         return new Table(networks.ToArray(), asns.ToArray(), keys, addresses);
     }
 

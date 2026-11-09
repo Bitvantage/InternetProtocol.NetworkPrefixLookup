@@ -31,15 +31,15 @@ namespace PerformanceTest.V2;
 /// </summary>
 public static class Program
 {
-    public static void Main(string[] args)
+    public static void Main(string[] arguments)
     {
-        if (args.Length > 0 && args[0] == "--memory")
+        if (arguments.Length > 0 && arguments[0] == "--memory")
         {
             Memory();
             return;
         }
 
-        BenchmarkSwitcher.FromTypes(new[] { typeof(ComparisonBenchmarks) }).Run(args.Length == 0 ? new[] { "--filter", "*" } : args);
+        BenchmarkSwitcher.FromTypes(new[] { typeof(ComparisonBenchmarks) }).Run(arguments.Length == 0 ? new[] { "--filter", "*" } : arguments);
     }
 
     private static void Memory()
@@ -49,11 +49,11 @@ public static class Program
             var data = ComparisonData.Get(name);
             var prefixes = ComparisonBenchmarks.Prefixes(data);
             var before = ComparisonData.HeapBytes();
-            var sw = Stopwatch.StartNew();
+            var stopwatch = Stopwatch.StartNew();
             var lookup = new NetworkPrefixLookup<int>();
-            for (var i = 0; i < prefixes.Length; i++)
-                lookup.TryAdd(prefixes[i], data.Values[i]);
-            var seconds = sw.Elapsed.TotalSeconds;
+            for (var prefixIndex = 0; prefixIndex < prefixes.Length; prefixIndex++)
+                lookup.TryAdd(prefixes[prefixIndex], data.Values[prefixIndex]);
+            var seconds = stopwatch.Elapsed.TotalSeconds;
             var held = ComparisonData.HeapBytes() - before;
 
             var allocated = GC.GetAllocatedBytesForCurrentThread();
@@ -80,7 +80,7 @@ public class ComparisonBenchmarks
     private NetworkPrefixLookup<int> _lookup = null!;
 
     /// <summary>A table's prefixes as the NetworkPrefix objects version 2 takes; version 3 makes IPNetwork values.</summary>
-    public static NetworkPrefix[] Prefixes(ComparisonData.Table data) => data.Prefixes.Select(p => new NetworkPrefix(p.Address, p.Length)).ToArray();
+    public static NetworkPrefix[] Prefixes(ComparisonData.Table data) => data.Prefixes.Select(prefix => new NetworkPrefix(prefix.Address, prefix.Length)).ToArray();
 
     [GlobalSetup]
     public void Setup()
@@ -93,8 +93,8 @@ public class ComparisonBenchmarks
     private NetworkPrefixLookup<int> Build()
     {
         var lookup = new NetworkPrefixLookup<int>();
-        for (var i = 0; i < _prefixes.Length; i++)
-            lookup.TryAdd(_prefixes[i], _data.Values[i]);
+        for (var prefixIndex = 0; prefixIndex < _prefixes.Length; prefixIndex++)
+            lookup.TryAdd(_prefixes[prefixIndex], _data.Values[prefixIndex]);
         return lookup;
     }
 

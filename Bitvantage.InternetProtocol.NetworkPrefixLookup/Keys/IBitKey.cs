@@ -71,16 +71,17 @@ public interface IBitKey<TSelf> where TSelf : struct, IBitKey<TSelf>
 
     /// <summary>
     ///     Compares two keys in address order: as unsigned integers with bit 0 the most significant. Negative when
-    ///     <paramref name="a" /> comes first, zero when the keys are equal, positive when <paramref name="b" /> comes first.
+    ///     <paramref name="left" /> comes first, zero when the keys are equal, positive when <paramref name="right" /> comes first.
     /// </summary>
-    /// <param name="a">The first key.</param>
-    /// <param name="b">The second key.</param>
-    internal static virtual int Compare(in TSelf a, in TSelf b)
+    /// <param name="left">The first key.</param>
+    /// <param name="right">The second key.</param>
+    internal static virtual int Compare(in TSelf left, in TSelf right)
     {
         for (var offset = 0; offset < TSelf.Width; offset += 8)
         {
-            var difference = TSelf.GetBits(a, offset, 8) - TSelf.GetBits(b, offset, 8);
-            if (difference != 0) return difference;
+            var difference = TSelf.GetBits(left, offset, 8) - TSelf.GetBits(right, offset, 8);
+            if (difference != 0)
+                return difference;
         }
 
         return 0;

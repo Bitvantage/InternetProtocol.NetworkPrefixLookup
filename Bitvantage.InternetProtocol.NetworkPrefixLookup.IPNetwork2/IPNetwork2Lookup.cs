@@ -78,9 +78,9 @@ public class IPNetwork2Lookup<TValue> : IPPrefixLookup<IPNetwork2, IPNetwork2Ada
     public new FrozenIPNetwork2Lookup<TValue> Freeze(FrozenBitTrieOptions? options = null) => new(this, options, options);
 
     /// <summary>Builds a read-only copy with a different layout for each address family. See <see cref="Freeze(FrozenBitTrieOptions?)" />.</summary>
-    /// <param name="ipv4">The layout of the IPv4 tables.</param>
-    /// <param name="ipv6">The layout of the IPv6 tables.</param>
-    public new FrozenIPNetwork2Lookup<TValue> Freeze(FrozenBitTrieOptions ipv4, FrozenBitTrieOptions ipv6) => new(this, ipv4, ipv6);
+    /// <param name="ipv4Options">The layout of the IPv4 tables.</param>
+    /// <param name="ipv6Options">The layout of the IPv6 tables.</param>
+    public new FrozenIPNetwork2Lookup<TValue> Freeze(FrozenBitTrieOptions ipv4Options, FrozenBitTrieOptions ipv6Options) => new(this, ipv4Options, ipv6Options);
 }
 
 /// <summary>A read-only set of <see cref="IPNetwork2" /> prefixes, built by <see cref="IPNetwork2Lookup{TValue}.Freeze(FrozenBitTrieOptions?)" />.</summary>
@@ -89,9 +89,9 @@ public class FrozenIPNetwork2Lookup<TValue> : FrozenIPPrefixLookup<IPNetwork2, I
 {
     /// <summary>Freezes a read-write lookup.</summary>
     /// <param name="source">The lookup to copy.</param>
-    /// <param name="ipv4">The layout of the IPv4 tables, or null for the default.</param>
-    /// <param name="ipv6">The layout of the IPv6 tables, or null for the default.</param>
-    protected internal FrozenIPNetwork2Lookup(IPNetwork2Lookup<TValue> source, FrozenBitTrieOptions? ipv4, FrozenBitTrieOptions? ipv6) : base(source, ipv4, ipv6)
+    /// <param name="ipv4Options">The layout of the IPv4 tables, or null for the default.</param>
+    /// <param name="ipv6Options">The layout of the IPv6 tables, or null for the default.</param>
+    protected internal FrozenIPNetwork2Lookup(IPNetwork2Lookup<TValue> source, FrozenBitTrieOptions? ipv4Options, FrozenBitTrieOptions? ipv6Options) : base(source, ipv4Options, ipv6Options)
     {
     }
 }

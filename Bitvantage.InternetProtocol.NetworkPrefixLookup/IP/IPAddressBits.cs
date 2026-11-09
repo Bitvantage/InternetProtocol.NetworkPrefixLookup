@@ -101,53 +101,53 @@ public static class IPAddressBits
     internal static bool ContainsIPv4Mapped(UInt128 bits, int length) =>
         length < 96 && (length == 0 || ((bits ^ ((UInt128)0xFFFF << 32)) >> (128 - length)) == 0);
 
-    // Sorts an address into a family: 4 with its bits in v4, or 6 with its bits in v6. With map set, an IPv4-mapped IPv6
-    // address counts as IPv4.
+    // Sorts an address into a family: 4 with its bits in ipv4Bits, or 6 with its bits in ipv6Bits. With map set, an
+    // IPv4-mapped IPv6 address counts as IPv4.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static bool IsIPv4(IPAddress address, bool map, out uint v4, out UInt128 v6)
+    internal static bool IsIPv4(IPAddress address, bool map, out uint ipv4Bits, out UInt128 ipv6Bits)
     {
         ArgumentNullException.ThrowIfNull(address);
         switch (address.AddressFamily)
         {
             case AddressFamily.InterNetwork:
-                v4 = IPv4Bits(address);
-                v6 = default;
+                ipv4Bits = IPv4Bits(address);
+                ipv6Bits = default;
                 return true;
             case AddressFamily.InterNetworkV6:
-                v6 = IPv6Bits(address);
-                return IsIPv4(v6, map, out v4);
+                ipv6Bits = IPv6Bits(address);
+                return IsIPv4(ipv6Bits, map, out ipv4Bits);
             default:
                 throw new ArgumentException($"Unsupported address family {address.AddressFamily}.", nameof(address));
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static bool IsIPv4(ReadOnlySpan<byte> address, bool map, out uint v4, out UInt128 v6)
+    internal static bool IsIPv4(ReadOnlySpan<byte> address, bool map, out uint ipv4Bits, out UInt128 ipv6Bits)
     {
         switch (address.Length)
         {
             case 4:
-                v4 = BinaryPrimitives.ReadUInt32BigEndian(address);
-                v6 = default;
+                ipv4Bits = BinaryPrimitives.ReadUInt32BigEndian(address);
+                ipv6Bits = default;
                 return true;
             case 16:
-                v6 = BinaryPrimitives.ReadUInt128BigEndian(address);
-                return IsIPv4(v6, map, out v4);
+                ipv6Bits = BinaryPrimitives.ReadUInt128BigEndian(address);
+                return IsIPv4(ipv6Bits, map, out ipv4Bits);
             default:
                 throw new ArgumentException("An address has 4 or 16 bytes.", nameof(address));
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static bool IsIPv4(UInt128 v6, bool map, out uint v4)
+    internal static bool IsIPv4(UInt128 ipv6Bits, bool map, out uint ipv4Bits)
     {
-        if (map && IsIPv4Mapped(v6))
+        if (map && IsIPv4Mapped(ipv6Bits))
         {
-            v4 = (uint)v6;
+            ipv4Bits = (uint)ipv6Bits;
             return true;
         }
 
-        v4 = 0;
+        ipv4Bits = 0;
         return false;
     }
 

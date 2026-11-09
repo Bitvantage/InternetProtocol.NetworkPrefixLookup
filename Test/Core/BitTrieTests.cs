@@ -33,18 +33,18 @@ public class BitTrieTests
         where TKey : struct, IBitKey<TKey>
     {
         var trie = new BitTrie<TKey, int, int>();
-        var b = batch ? trie.BeginBatch() : null;
-        foreach (var i in order)
-            Assert.That(trie.TryAdd(prefixes[i].Bits, prefixes[i].Length, i, i * 7), Is.True);
-        b?.Commit();
+        var openBatch = batch ? trie.BeginBatch() : null;
+        foreach (var prefixIndex in order)
+            Assert.That(trie.TryAdd(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, prefixIndex, prefixIndex * 7), Is.True);
+        openBatch?.Commit();
         return trie;
     }
 
     private static ReferenceTrie<TKey> Reference<TKey>(List<(TKey Bits, int Length)> prefixes, IEnumerable<int> order) where TKey : struct, IBitKey<TKey>
     {
         var reference = new ReferenceTrie<TKey>();
-        foreach (var i in order)
-            reference.Add(prefixes[i].Bits, prefixes[i].Length, i);
+        foreach (var prefixIndex in order)
+            reference.Add(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, prefixIndex);
         return reference;
     }
 
@@ -80,68 +80,69 @@ public class BitTrieTests
             if (trie.ContainsMatch(in key) != expected.Count > 0)
                 failures.Add($"ContainsMatch({key})");
 
-            var all = trie.GetMatches(in key).Select(e => e.Prefix).ToList();
-            if (!all.SequenceEqual(expected.Select(e => e.Value)))
-                failures.Add($"GetMatches({key}) gave [{string.Join(", ", all)}], expected [{string.Join(", ", expected.Select(e => e.Value))}]");
+            var all = trie.GetMatches(in key).Select(entry => entry.Prefix).ToList();
+            if (!all.SequenceEqual(expected.Select(match => match.Value)))
+                failures.Add($"GetMatches({key}) gave [{string.Join(", ", all)}], expected [{string.Join(", ", expected.Select(match => match.Value))}]");
             var count = trie.GetMatches(in key, span);
-            if (!span.Take(count).Select(e => e.Prefix).SequenceEqual(expected.Select(e => e.Value)))
+            if (!span.Take(count).Select(entry => entry.Prefix).SequenceEqual(expected.Select(match => match.Value)))
                 failures.Add($"GetMatches({key}, span)");
         }
 
         // prefix queries, at the stored prefixes and at prefixes one bit longer and shorter
         var subnetQueries = 0;
         foreach (var (bits, length) in prefixes)
-            foreach (var l in new[] { length - 1, length, length + 1 })
+            foreach (var queryLength in new[] { length - 1, length, length + 1 })
             {
-                if (l < 0 || l > TKey.Width) continue;
-                var expected = reference.Matches(bits, l);
-                var found = trie.TryGetMatch(in bits, l, out var prefix, out var value);
+                if (queryLength < 0 || queryLength > TKey.Width)
+                    continue;
+                var expected = reference.Matches(bits, queryLength);
+                var found = trie.TryGetMatch(in bits, queryLength, out var prefix, out var value);
                 if (found != expected.Count > 0 || (found && (prefix != expected[0].Value || value != prefix * 7)))
-                    failures.Add($"TryGetMatch({bits}/{l}) gave {(found ? prefix : -1)}, expected {(expected.Count > 0 ? expected[0].Value : -1)}");
+                    failures.Add($"TryGetMatch({bits}/{queryLength}) gave {(found ? prefix : -1)}, expected {(expected.Count > 0 ? expected[0].Value : -1)}");
 
-                var exact = reference.TryGetValue(bits, l, out var expectedValue);
-                if (trie.ContainsPrefix(in bits, l) != exact)
-                    failures.Add($"ContainsPrefix({bits}/{l})");
-                if (trie.TryGetValue(in bits, l, out value) != exact || (exact && value != expectedValue * 7))
-                    failures.Add($"TryGetValue({bits}/{l})");
-                if (trie.TryGetValue(in bits, l, out prefix, out value) != exact || (exact && (prefix != expectedValue || value != expectedValue * 7)))
-                    failures.Add($"TryGetValue({bits}/{l}) with the prefix object");
+                var exact = reference.TryGetValue(bits, queryLength, out var expectedValue);
+                if (trie.ContainsPrefix(in bits, queryLength) != exact)
+                    failures.Add($"ContainsPrefix({bits}/{queryLength})");
+                if (trie.TryGetValue(in bits, queryLength, out value) != exact || (exact && value != expectedValue * 7))
+                    failures.Add($"TryGetValue({bits}/{queryLength})");
+                if (trie.TryGetValue(in bits, queryLength, out prefix, out value) != exact || (exact && (prefix != expectedValue || value != expectedValue * 7)))
+                    failures.Add($"TryGetValue({bits}/{queryLength}) with the prefix object");
 
-                var matches = trie.GetMatches(in bits, l);
-                if (!matches.Select(e => e.Prefix).SequenceEqual(expected.Select(e => e.Value)) || matches.Any(e => e.Value != e.Prefix * 7))
-                    failures.Add($"GetMatches({bits}/{l}) gave [{string.Join(", ", matches.Select(e => e.Prefix))}], expected [{string.Join(", ", expected.Select(e => e.Value))}]");
-                var count = trie.GetMatches(in bits, l, span);
-                if (!span.Take(count).Select(e => e.Prefix).SequenceEqual(expected.Select(e => e.Value)))
-                    failures.Add($"GetMatches({bits}/{l}, span)");
-                if (trie.Overlaps(in bits, l) != reference.Overlaps(bits, l))
-                    failures.Add($"Overlaps({bits}/{l}) gave {!reference.Overlaps(bits, l)}");
+                var matches = trie.GetMatches(in bits, queryLength);
+                if (!matches.Select(entry => entry.Prefix).SequenceEqual(expected.Select(match => match.Value)) || matches.Any(entry => entry.Value != entry.Prefix * 7))
+                    failures.Add($"GetMatches({bits}/{queryLength}) gave [{string.Join(", ", matches.Select(entry => entry.Prefix))}], expected [{string.Join(", ", expected.Select(match => match.Value))}]");
+                var count = trie.GetMatches(in bits, queryLength, span);
+                if (!span.Take(count).Select(entry => entry.Prefix).SequenceEqual(expected.Select(match => match.Value)))
+                    failures.Add($"GetMatches({bits}/{queryLength}, span)");
+                if (trie.Overlaps(in bits, queryLength) != reference.Overlaps(bits, queryLength))
+                    failures.Add($"Overlaps({bits}/{queryLength}) gave {!reference.Overlaps(bits, queryLength)}");
                 if (subnetQueries++ % 5 == 0)
-                    CheckSubnets(bits, l);
+                    CheckSubnets(bits, queryLength);
             }
 
         // shorter prefixes, which hold more: one of every length at a sample of the probe keys, and the empty prefix
-        for (var i = 0; i < keys.Count; i += 40)
+        for (var keyIndex = 0; keyIndex < keys.Count; keyIndex += 40)
         {
-            var (bits, l) = (keys[i], i / 40 % (TKey.Width + 1));
-            CheckSubnets(bits, l);
-            if (trie.Overlaps(in bits, l) != reference.Overlaps(bits, l))
-                failures.Add($"Overlaps({bits}/{l}) gave {!reference.Overlaps(bits, l)}");
-            if (!trie.GetMatches(in bits, l).Select(e => e.Prefix).SequenceEqual(reference.Matches(bits, l).Select(e => e.Value)))
-                failures.Add($"GetMatches({bits}/{l})");
+            var (bits, queryLength) = (keys[keyIndex], keyIndex / 40 % (TKey.Width + 1));
+            CheckSubnets(bits, queryLength);
+            if (trie.Overlaps(in bits, queryLength) != reference.Overlaps(bits, queryLength))
+                failures.Add($"Overlaps({bits}/{queryLength}) gave {!reference.Overlaps(bits, queryLength)}");
+            if (!trie.GetMatches(in bits, queryLength).Select(entry => entry.Prefix).SequenceEqual(reference.Matches(bits, queryLength).Select(match => match.Value)))
+                failures.Add($"GetMatches({bits}/{queryLength})");
         }
 
         CheckSubnets(default, 0);
 
-        void CheckSubnets(TKey bits, int l)
+        void CheckSubnets(TKey bits, int queryLength)
         {
-            var subnets = trie.GetSubnets(in bits, l).ToList();
-            var expected = reference.Subnets(bits, l);
-            if (!subnets.Select(e => e.Prefix).SequenceEqual(expected) || subnets.Any(e => e.Value != e.Prefix * 7))
-                failures.Add($"GetSubnets({bits}/{l}) gave {subnets.Count} prefixes starting [{string.Join(", ", subnets.Take(5).Select(e => e.Prefix))}], expected {expected.Count} starting [{string.Join(", ", expected.Take(5))}]");
+            var subnets = trie.GetSubnets(in bits, queryLength).ToList();
+            var expected = reference.Subnets(bits, queryLength);
+            if (!subnets.Select(entry => entry.Prefix).SequenceEqual(expected) || subnets.Any(entry => entry.Value != entry.Prefix * 7))
+                failures.Add($"GetSubnets({bits}/{queryLength}) gave {subnets.Count} prefixes starting [{string.Join(", ", subnets.Take(5).Select(entry => entry.Prefix))}], expected {expected.Count} starting [{string.Join(", ", expected.Take(5))}]");
         }
 
         Assert.That(trie.Count, Is.EqualTo(reference.Count), because);
-        Assert.That(trie.Select(e => e.Prefix), Is.EqualTo(reference.InOrder().Select(e => e.Value)), because + ": enumeration order");
+        Assert.That(trie.Select(entry => entry.Prefix), Is.EqualTo(reference.InOrder().Select(storedPrefix => storedPrefix.Value)), because + ": enumeration order");
         Assert.That(failures, Is.Empty, $"{because}: {failures.Count} failures, the first: {failures.FirstOrDefault()}");
     }
 
@@ -155,25 +156,25 @@ public class BitTrieTests
         var trie = Build(prefixes, all);
         AssertQueries(trie, reference, prefixes, keys, "one at a time");
         AssertQueries(Build(prefixes, all, batch: true), reference, prefixes, keys, "batch");
-        var built = new BitTrie<TKey, int, int>(all.Select(i => (prefixes[i].Bits, prefixes[i].Length, i, i * 7)));
+        var built = new BitTrie<TKey, int, int>(all.Select(prefixIndex => (prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, prefixIndex, prefixIndex * 7)));
         AssertQueries(built, reference, prefixes, keys, "built from a sequence");
         Assert.That(built.ToTextTree(Format), Is.EqualTo(trie.ToTextTree(Format)), "built from a sequence: shape");
         foreach (var layout in Layouts)
             AssertQueries(trie.Freeze(layout), reference, prefixes, keys, $"frozen {layout}");
 
         // remove a third, then check again
-        foreach (var i in all.Where(i => i % 3 == 0))
+        foreach (var prefixIndex in all.Where(prefixIndex => prefixIndex % 3 == 0))
         {
-            Assert.That(trie.Remove(prefixes[i].Bits, prefixes[i].Length), Is.True);
-            reference.Remove(prefixes[i].Bits, prefixes[i].Length);
+            Assert.That(trie.Remove(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length), Is.True);
+            reference.Remove(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length);
         }
 
         AssertQueries(trie, reference, prefixes, keys, "after removal");
         AssertQueries(trie.Freeze(), reference, prefixes, keys, "frozen after removal");
 
         // a trie built from a sequence takes later writes as one built by them
-        foreach (var i in all.Where(i => i % 3 == 0))
-            Assert.That(built.Remove(prefixes[i].Bits, prefixes[i].Length), Is.True);
+        foreach (var prefixIndex in all.Where(prefixIndex => prefixIndex % 3 == 0))
+            Assert.That(built.Remove(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length), Is.True);
         AssertQueries(built, reference, prefixes, keys, "built from a sequence, after removal");
         Assert.That(built.ToTextTree(Format), Is.EqualTo(trie.ToTextTree(Format)), "built from a sequence, after removal: shape");
     }
@@ -214,8 +215,8 @@ public class BitTrieTests
         Assert.That(Build(prefixes, all, batch: true).ToTextTree(Format), Is.EqualTo(expected), "batch");
 
         // built from a sequence in any order: the same shape, and the same nodes and arrays as after a batch
-        BitTrie<Bits32, int, int> FromSequence(IEnumerable<int> order) => new(order.Select(i => (prefixes[i].Bits, prefixes[i].Length, i, i * 7)));
-        var sorted = all.OrderBy(i => prefixes[i].Bits.Value).ThenBy(i => prefixes[i].Length).ToList();
+        BitTrie<Bits32, int, int> FromSequence(IEnumerable<int> order) => new(order.Select(prefixIndex => (prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, prefixIndex, prefixIndex * 7)));
+        var sorted = all.OrderBy(prefixIndex => prefixes[prefixIndex].Bits.Value).ThenBy(prefixIndex => prefixes[prefixIndex].Length).ToList();
         foreach (var (order, name) in new[] { (sorted, "sorted"), (all.OrderBy(_ => random.Next()).ToList(), "shuffled"), (Enumerable.Reverse(sorted).ToList(), "reversed") })
         {
             var built = FromSequence(order);
@@ -248,25 +249,25 @@ public class BitTrieTests
     {
         var prefixes = TestKeys.RandomPrefixes<Bits128>(5000, 2);
         var all = Enumerable.Range(0, prefixes.Count).ToList();
-        var kept = all.Where(i => i % 5 != 0).ToList();
+        var kept = all.Where(prefixIndex => prefixIndex % 5 != 0).ToList();
         var trie = Build(prefixes, all);
-        foreach (var i in all.Where(i => i % 5 == 0))
-            Assert.That(trie.Remove(prefixes[i].Bits, prefixes[i].Length), Is.True);
+        foreach (var prefixIndex in all.Where(prefixIndex => prefixIndex % 5 == 0))
+            Assert.That(trie.Remove(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length), Is.True);
         Assert.That(trie.ToTextTree(Format), Is.EqualTo(Build(prefixes, kept).ToTextTree(Format)));
 
         // and in a batch
         trie = Build(prefixes, all);
         using (var batch = trie.BeginBatch())
         {
-            foreach (var i in all.Where(i => i % 5 == 0))
-                Assert.That(trie.Remove(prefixes[i].Bits, prefixes[i].Length), Is.True);
+            foreach (var prefixIndex in all.Where(prefixIndex => prefixIndex % 5 == 0))
+                Assert.That(trie.Remove(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length), Is.True);
             batch.Commit();
         }
 
         Assert.That(trie.ToTextTree(Format), Is.EqualTo(Build(prefixes, kept).ToTextTree(Format)), "batch");
 
-        foreach (var i in kept)
-            Assert.That(trie.Remove(prefixes[i].Bits, prefixes[i].Length), Is.True);
+        foreach (var prefixIndex in kept)
+            Assert.That(trie.Remove(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length), Is.True);
         Assert.That(trie.Count, Is.Zero);
         Assert.That(trie.ToTextTree(Format), Is.Empty);
         Assert.That(trie.TryGetMatch(prefixes[0].Bits, out _, out _), Is.False);
@@ -311,7 +312,7 @@ public class BitTrieTests
 
         var calls = 0;
         Assert.That(trie.GetOrAdd(bits, 8, "e", _ => { calls++; return 5; }), Is.EqualTo(3));
-        Assert.That(trie.GetOrAdd(bits, 16, "f", p => { calls++; return p.Length; }), Is.EqualTo(1));
+        Assert.That(trie.GetOrAdd(bits, 16, "f", prefixObject => { calls++; return prefixObject.Length; }), Is.EqualTo(1));
         Assert.That(calls, Is.EqualTo(1));
 
         Assert.That(trie.Remove(bits, 24), Is.False);
@@ -370,11 +371,12 @@ public class BitTrieTests
         const int threads = 4, increments = 20_000;
         Parallel.For(0, threads, new ParallelOptions { MaxDegreeOfParallelism = threads }, _ =>
         {
-            for (var i = 0; i < increments; i++)
+            for (var incrementIndex = 0; incrementIndex < increments; incrementIndex++)
                 while (true)
                 {
                     trie.TryGetValue(bits, 16, out var current);
-                    if (trie.TryUpdate(bits, 16, 0, current + 1, current)) break;
+                    if (trie.TryUpdate(bits, 16, 0, current + 1, current))
+                        break;
                 }
         });
 
@@ -408,13 +410,13 @@ public class BitTrieTests
         trie.Add(new Bits128(UInt128.MaxValue), 128, 128, 0);
         trie.Add(new Bits128(UInt128.One), 128, 1, 0);
         trie.Add(new Bits128(UInt128.MaxValue << 1), 127, 127, 0);
-        foreach (var t in new IReadOnlyBitTrie<Bits128, int, int>[] { trie, trie.Freeze(), trie.Freeze(new FrozenBitTrieOptions { Layout = FrozenLayout.Compressed }) })
+        foreach (var form in new IReadOnlyBitTrie<Bits128, int, int>[] { trie, trie.Freeze(), trie.Freeze(new FrozenBitTrieOptions { Layout = FrozenLayout.Compressed }) })
         {
-            Assert.That(t.TryGetMatch(new Bits128(UInt128.MaxValue), out var p, out _) && p == 128);
-            Assert.That(t.TryGetMatch(new Bits128(UInt128.MaxValue - 1), out p, out _) && p == 127);
-            Assert.That(t.TryGetMatch(new Bits128(UInt128.One), out p, out _) && p == 1);
-            Assert.That(t.TryGetMatch(new Bits128(2), out p, out _) && p == 0);
-            Assert.That(t.GetMatches(new Bits128(UInt128.MaxValue)).Select(e => e.Prefix), Is.EqualTo(new[] { 128, 127, 0 }));
+            Assert.That(form.TryGetMatch(new Bits128(UInt128.MaxValue), out var prefix, out _) && prefix == 128);
+            Assert.That(form.TryGetMatch(new Bits128(UInt128.MaxValue - 1), out prefix, out _) && prefix == 127);
+            Assert.That(form.TryGetMatch(new Bits128(UInt128.One), out prefix, out _) && prefix == 1);
+            Assert.That(form.TryGetMatch(new Bits128(2), out prefix, out _) && prefix == 0);
+            Assert.That(form.GetMatches(new Bits128(UInt128.MaxValue)).Select(entry => entry.Prefix), Is.EqualTo(new[] { 128, 127, 0 }));
         }
 
         var empty = new BitTrie<Bits32, int, int>();
@@ -459,10 +461,10 @@ public class BitTrieTests
         var longestFirst = Enumerable.Range(0, 33).Reverse().ToArray();
         foreach (var form in new IReadOnlyBitTrie<Bits32, int, int>[] { trie, trie.Freeze() })
         {
-            Assert.That(form.GetMatches(default).Select(e => e.Prefix), Is.EqualTo(longestFirst));
+            Assert.That(form.GetMatches(default).Select(entry => entry.Prefix), Is.EqualTo(longestFirst));
             var span = new PrefixEntry<int, int>[33];
             Assert.That(form.GetMatches(default, span), Is.EqualTo(33));
-            Assert.That(span.Select(e => e.Prefix), Is.EqualTo(longestFirst));
+            Assert.That(span.Select(entry => entry.Prefix), Is.EqualTo(longestFirst));
             Assert.Throws<ArgumentException>(() => form.GetMatches(default, new PrefixEntry<int, int>[32]));
         }
     }
@@ -482,17 +484,17 @@ public class BitTrieTests
     {
         var prefixes = TestKeys.RandomPrefixes<Bits32>(4000, 3);
         var all = Enumerable.Range(0, prefixes.Count).ToList();
-        var first = all.Where(i => i % 2 == 0).ToList();
+        var first = all.Where(prefixIndex => prefixIndex % 2 == 0).ToList();
         var keys = TestKeys.ProbeKeys(prefixes, 4);
         var trie = Build(prefixes, first);
         var before = Reference(prefixes, first);
         var version = trie.Version;
 
         var batch = trie.BeginBatch();
-        foreach (var i in all.Where(i => i % 2 == 1))
-            trie.Add(prefixes[i].Bits, prefixes[i].Length, i, i * 7);
-        foreach (var i in first.Where(i => i % 3 == 0))
-            trie.Remove(prefixes[i].Bits, prefixes[i].Length);
+        foreach (var prefixIndex in all.Where(prefixIndex => prefixIndex % 2 == 1))
+            trie.Add(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, prefixIndex, prefixIndex * 7);
+        foreach (var prefixIndex in first.Where(prefixIndex => prefixIndex % 3 == 0))
+            trie.Remove(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length);
 
         // checked from another thread, which does not hold the writer lock
         Task.Run(() => AssertQueries(trie, before, prefixes, keys, "during the batch")).Wait();
@@ -501,7 +503,7 @@ public class BitTrieTests
         batch.Commit();
         Assert.Throws<ObjectDisposedException>(() => batch.Commit());
 
-        var after = all.Where(i => i % 2 == 1 || i % 3 != 0).ToList();
+        var after = all.Where(prefixIndex => prefixIndex % 2 == 1 || prefixIndex % 3 != 0).ToList();
         AssertQueries(trie, Reference(prefixes, after), prefixes, keys, "after the batch");
         Assert.That(trie.ToTextTree(Format), Is.EqualTo(Build(prefixes, after).ToTextTree(Format)));
         Assert.That(trie.Version, Is.EqualTo(version + 1), "one change for the whole batch");
@@ -512,16 +514,16 @@ public class BitTrieTests
     {
         var prefixes = TestKeys.RandomPrefixes<Bits32>(4000, 5);
         var all = Enumerable.Range(0, prefixes.Count).ToList();
-        var first = all.Where(i => i % 2 == 0).ToList();
+        var first = all.Where(prefixIndex => prefixIndex % 2 == 0).ToList();
         var trie = Build(prefixes, first);
         var expected = trie.ToTextTree(Format);
 
         using (trie.BeginBatch())
         {
-            foreach (var i in all.Where(i => i % 2 == 1))
-                trie.Add(prefixes[i].Bits, prefixes[i].Length, i, i * 7);
-            foreach (var i in first.Where(i => i % 3 == 0))
-                trie.Remove(prefixes[i].Bits, prefixes[i].Length);
+            foreach (var prefixIndex in all.Where(prefixIndex => prefixIndex % 2 == 1))
+                trie.Add(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, prefixIndex, prefixIndex * 7);
+            foreach (var prefixIndex in first.Where(prefixIndex => prefixIndex % 3 == 0))
+                trie.Remove(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length);
             trie.Clear();
             trie.Add(prefixes[1].Bits, prefixes[1].Length, 1, 7);
         }
@@ -530,8 +532,8 @@ public class BitTrieTests
         Assert.That(trie.Count, Is.EqualTo(first.Count));
 
         // the published nodes were not changed in place, so the trie still works normally afterwards
-        foreach (var i in all.Where(i => i % 2 == 1))
-            trie.Add(prefixes[i].Bits, prefixes[i].Length, i, i * 7);
+        foreach (var prefixIndex in all.Where(prefixIndex => prefixIndex % 2 == 1))
+            trie.Add(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, prefixIndex, prefixIndex * 7);
         AssertQueries(trie, Reference(prefixes, all), prefixes, TestKeys.ProbeKeys(prefixes, 6), "after the discarded batch");
     }
 
@@ -539,18 +541,18 @@ public class BitTrieTests
     public void Version_changes_with_each_published_change()
     {
         var trie = new BitTrie<Bits32, int, int>();
-        var v = trie.Version;
+        var previousVersion = trie.Version;
         trie.Add(default, 8, 0, 0);
-        Assert.That(trie.Version, Is.GreaterThan(v));
-        v = trie.Version;
+        Assert.That(trie.Version, Is.GreaterThan(previousVersion));
+        previousVersion = trie.Version;
         trie.TryAdd(default, 8, 0, 0);
         trie.Remove(default, 9);
-        Assert.That(trie.Version, Is.EqualTo(v), "no change");
+        Assert.That(trie.Version, Is.EqualTo(previousVersion), "no change");
         trie.AddOrUpdate(default, 8, 1, 1);
-        Assert.That(trie.Version, Is.GreaterThan(v));
-        v = trie.Version;
+        Assert.That(trie.Version, Is.GreaterThan(previousVersion));
+        previousVersion = trie.Version;
         trie.Clear();
-        Assert.That(trie.Version, Is.GreaterThan(v));
+        Assert.That(trie.Version, Is.GreaterThan(previousVersion));
     }
 
     [Test]
@@ -592,8 +594,8 @@ public class BitTrieTests
     {
         // /24 prefixes clustered in 79 /16 blocks, as in a routing table: about one child-table entry per prefix
         var clustered = new BitTrie<Bits32, int, int>();
-        for (var i = 0; i < 20_000; i++)
-            clustered.Add(new Bits32(0x0A000000u | ((uint)i << 8)), 24, i, i);
+        for (var prefixIndex = 0; prefixIndex < 20_000; prefixIndex++)
+            clustered.Add(new Bits32(0x0A000000u | ((uint)prefixIndex << 8)), 24, prefixIndex, prefixIndex);
         Assert.That(clustered.Freeze().Layout, Is.EqualTo(FrozenLayout.LeafPushed));
         Assert.That(clustered.Freeze(new FrozenBitTrieOptions { Layout = FrozenLayout.Compressed }).Layout, Is.EqualTo(FrozenLayout.Compressed), "a layout given is kept");
 
@@ -601,10 +603,11 @@ public class BitTrieTests
         var random = new Random(3);
         var scattered = new BitTrie<Bits128, int, int>();
         var keys = new List<Bits128>();
-        for (var i = 0; i < 2_000; i++)
+        for (var routeIndex = 0; routeIndex < 2_000; routeIndex++)
         {
             var key = new Bits128(((UInt128)(ulong)random.NextInt64() << 64) | (ulong)random.NextInt64());
-            if (scattered.TryAdd(key, 128, i, i)) keys.Add(key);
+            if (scattered.TryAdd(key, 128, routeIndex, routeIndex))
+                keys.Add(key);
         }
 
         var chosen = scattered.Freeze();
@@ -614,7 +617,7 @@ public class BitTrieTests
             Assert.That(chosen.TryGetMatchValue(key, out var value) && scattered.TryGetMatchValue(key, out var expected) && value == expected);
 
         // the same scattering in a table small enough to stay in the cache keeps the faster layout
-        var small = new BitTrie<Bits128, int, int>(keys.Take(500).Select((k, i) => (k, 128, i, i)));
+        var small = new BitTrie<Bits128, int, int>(keys.Take(500).Select((key, routeIndex) => (key, 128, routeIndex, routeIndex)));
         Assert.That(small.Freeze().Layout, Is.EqualTo(FrozenLayout.LeafPushed));
     }
 
@@ -624,8 +627,8 @@ public class BitTrieTests
         static BitTrie<Bits32, int, int> Octets(int count)
         {
             var trie = new BitTrie<Bits32, int, int>();
-            for (var i = 0; i < count; i++)
-                trie.Add(new Bits32((uint)i << 24), 8, i, i);
+            for (var octet = 0; octet < count; octet++)
+                trie.Add(new Bits32((uint)octet << 24), 8, octet, octet);
             return trie;
         }
 
@@ -658,7 +661,8 @@ public class BitTrieTests
         for (var length = 0; length < 32; length++)
         {
             path.Add((new Bits32(0), length));
-            if (length > 0) path.Add((new Bits32(1u << (32 - length)), length)); // the sibling at each level
+            if (length > 0)
+                path.Add((new Bits32(1u << (32 - length)), length)); // the sibling at each level
         }
 
         trie.Add(new Bits32(0), 32, -1, -1);
@@ -695,42 +699,40 @@ public class BitTrieTests
     public void Lookups_stay_valid_under_churn()
     {
         var prefixes = TestKeys.RandomPrefixes<Bits32>(20000, 10);
-        var stable = Enumerable.Range(0, prefixes.Count).Where(i => i % 2 == 0).ToList();
-        var churned = Enumerable.Range(0, prefixes.Count).Where(i => i % 2 == 1).ToList();
+        var stable = Enumerable.Range(0, prefixes.Count).Where(prefixIndex => prefixIndex % 2 == 0).ToList();
+        var churned = Enumerable.Range(0, prefixes.Count).Where(prefixIndex => prefixIndex % 2 == 1).ToList();
         var trie = Build(prefixes, stable);
         var reference = Reference(prefixes, stable);
         var keys = TestKeys.ProbeKeys(prefixes, 11).ToArray();
-        var expected = keys.Select(k => reference.Matches(k, 32) is { Count: > 0 } m ? m[0].Length : -1).ToArray();
+        var expected = keys.Select(probeKey => reference.Matches(probeKey, 32) is { Count: > 0 } referenceMatches ? referenceMatches[0].Length : -1).ToArray();
 
         long failures = 0;
         var positions = new int[3];
         var random = new Random(12);
-        WithReaders(3, r =>
+        WithReaders(3, readerIndex =>
         {
-            var at = positions[r] = (positions[r] + 1) % keys.Length;
+            var keyIndex = positions[readerIndex] = (positions[readerIndex] + 1) % keys.Length;
             // the answer is a stable prefix at least as long as the stable answer, or a churned one longer still, and
             // it must contain the key
-            if (trie.TryGetMatch(keys[at], out var prefix, out var value))
+            if (trie.TryGetMatch(keys[keyIndex], out var prefix, out var value))
             {
                 var (bits, length) = prefixes[prefix];
-                if (value != prefix * 7 || length < expected[at] || (keys[at].Value & (uint)((ulong)uint.MaxValue << (32 - length))) != bits.Value)
+                if (value != prefix * 7 || length < expected[keyIndex] || (keys[keyIndex].Value & (uint)((ulong)uint.MaxValue << (32 - length))) != bits.Value)
                     Interlocked.Increment(ref failures);
             }
-            else if (expected[at] >= 0)
-            {
+            else if (expected[keyIndex] >= 0)
                 Interlocked.Increment(ref failures);
-            }
 
-            if (expected[at] >= 0 && !trie.ContainsMatch(keys[at]))
+            if (expected[keyIndex] >= 0 && !trie.ContainsMatch(keys[keyIndex]))
                 Interlocked.Increment(ref failures);
         }, () =>
         {
             for (var round = 0; round < 20; round++)
             {
-                foreach (var i in churned.OrderBy(_ => random.Next()))
-                    trie.Add(prefixes[i].Bits, prefixes[i].Length, i, i * 7);
-                foreach (var i in churned.OrderBy(_ => random.Next()))
-                    trie.Remove(prefixes[i].Bits, prefixes[i].Length);
+                foreach (var prefixIndex in churned.OrderBy(_ => random.Next()))
+                    trie.Add(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, prefixIndex, prefixIndex * 7);
+                foreach (var prefixIndex in churned.OrderBy(_ => random.Next()))
+                    trie.Remove(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length);
             }
         });
 
@@ -745,19 +747,19 @@ public class BitTrieTests
         var all = Enumerable.Range(0, prefixes.Count).ToList();
         var reference = Reference(prefixes, all);
         var keys = TestKeys.ProbeKeys(prefixes, 14).ToArray();
-        var expected = keys.Select(k => reference.Matches(k, 32) is { Count: > 0 } m ? m[0].Value : -1).ToArray();
+        var expected = keys.Select(probeKey => reference.Matches(probeKey, 32) is { Count: > 0 } referenceMatches ? referenceMatches[0].Value : -1).ToArray();
 
         // each update stores the round times the prefix count plus the index as both prefix object and value, so the two
         // agree, and the remainder names the prefix, which never changes; round 0 is the index itself
-        var trie = new BitTrie<Bits32, int, int>(prefixes.Select((p, i) => (p.Bits, p.Length, i, i)));
+        var trie = new BitTrie<Bits32, int, int>(prefixes.Select((storedPrefix, prefixIndex) => (storedPrefix.Bits, storedPrefix.Length, prefixIndex, prefixIndex)));
         long failures = 0, lookups = 0;
         var positions = new int[3];
         var random = new Random(15);
-        WithReaders(3, r =>
+        WithReaders(3, readerIndex =>
         {
-            var at = positions[r] = (positions[r] + 1) % keys.Length;
-            var found = trie.TryGetMatch(keys[at], out var prefix, out var value);
-            if (found != expected[at] >= 0 || found && (prefix != value || prefix % prefixes.Count != expected[at]))
+            var keyIndex = positions[readerIndex] = (positions[readerIndex] + 1) % keys.Length;
+            var found = trie.TryGetMatch(keys[keyIndex], out var prefix, out var value);
+            if (found != expected[keyIndex] >= 0 || found && (prefix != value || prefix % prefixes.Count != expected[keyIndex]))
                 Interlocked.Increment(ref failures);
             Interlocked.Increment(ref lookups);
         }, () =>
@@ -765,13 +767,13 @@ public class BitTrieTests
             for (var round = 1; round <= 20; round++)
             {
                 var batch = round % 4 == 0 ? trie.BeginBatch() : null;
-                foreach (var i in all.OrderBy(_ => random.Next()))
+                foreach (var prefixIndex in all.OrderBy(_ => random.Next()))
                 {
-                    var stored = round * prefixes.Count + i;
+                    var stored = round * prefixes.Count + prefixIndex;
                     if (round % 2 == 0)
-                        Assert.That(trie.AddOrUpdate(prefixes[i].Bits, prefixes[i].Length, stored, stored), Is.False);
+                        Assert.That(trie.AddOrUpdate(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, stored, stored), Is.False);
                     else
-                        Assert.That(trie.TryUpdate(prefixes[i].Bits, prefixes[i].Length, stored, stored, stored - prefixes.Count), Is.True);
+                        Assert.That(trie.TryUpdate(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, stored, stored, stored - prefixes.Count), Is.True);
                 }
 
                 batch?.Commit();
@@ -797,9 +799,9 @@ public class BitTrieTests
         var readers = Environment.ProcessorCount * 4;
         var matches = Enumerable.Range(0, readers).Select(_ => new PrefixEntry<int, int>[33]).ToArray();
         long failures = 0;
-        WithReaders(readers, r =>
+        WithReaders(readers, readerIndex =>
         {
-            if (!trie.TryGetMatchValue(key, out _) || !trie.ContainsMatch(key) || !trie.TryGetMatch(key, 24, out _, out _) || trie.GetMatches(key, matches[r]) == 0)
+            if (!trie.TryGetMatchValue(key, out _) || !trie.ContainsMatch(key) || !trie.TryGetMatch(key, 24, out _, out _) || trie.GetMatches(key, matches[readerIndex]) == 0)
                 Interlocked.Increment(ref failures);
         }, () =>
         {
@@ -923,7 +925,7 @@ public class BitTrieTests
     {
         var prefixes = TestKeys.RandomPrefixes<Bits128>(8000, 13);
         var trie = new BitTrie<Bits128, int, int>();
-        Parallel.For(0, prefixes.Count, new ParallelOptions { MaxDegreeOfParallelism = 4 }, i => trie.Add(prefixes[i].Bits, prefixes[i].Length, i, i * 7));
+        Parallel.For(0, prefixes.Count, new ParallelOptions { MaxDegreeOfParallelism = 4 }, prefixIndex => trie.Add(prefixes[prefixIndex].Bits, prefixes[prefixIndex].Length, prefixIndex, prefixIndex * 7));
         Assert.That(trie.Count, Is.EqualTo(prefixes.Count));
         Assert.That(trie.ToTextTree(Format), Is.EqualTo(Build(prefixes, Enumerable.Range(0, prefixes.Count)).ToTextTree(Format)));
     }
@@ -932,12 +934,12 @@ public class BitTrieTests
     private static void WithReaders(int count, Action<int> read, Action write)
     {
         var stop = false;
-        var readers = Enumerable.Range(0, count).Select(r => new Thread(() =>
+        var readers = Enumerable.Range(0, count).Select(readerIndex => new Thread(() =>
         {
             while (!Volatile.Read(ref stop))
-                read(r);
+                read(readerIndex);
         }) { IsBackground = true }).ToList();
-        readers.ForEach(t => t.Start());
+        readers.ForEach(readerThread => readerThread.Start());
         try
         {
             write();
@@ -945,7 +947,7 @@ public class BitTrieTests
         finally
         {
             Volatile.Write(ref stop, true);
-            readers.ForEach(t => t.Join());
+            readers.ForEach(readerThread => readerThread.Join());
         }
     }
 }

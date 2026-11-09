@@ -41,7 +41,7 @@ public static class MaxMindWriter
         var left = new List<int> { Empty };
         var right = new List<int> { Empty };
         var records = new Dictionary<uint, int>(); // number to record index
-        foreach (var (bits, length, asn) in networks.OrderBy(n => n.Length))
+        foreach (var (bits, length, asn) in networks.OrderBy(network => network.Length))
         {
             if (!records.TryGetValue(asn, out var record))
                 records.Add(asn, record = records.Count);
@@ -51,7 +51,7 @@ public static class MaxMindWriter
         // data section: one map per record, in record order
         var data = new List<byte>();
         var offsets = new int[records.Count];
-        foreach (var (asn, record) in records.OrderBy(r => r.Value))
+        foreach (var (asn, record) in records.OrderBy(entry => entry.Value))
         {
             offsets[record] = data.Count;
             Control(data, 7, 1);
@@ -62,10 +62,10 @@ public static class MaxMindWriter
         var nodeCount = left.Count;
         using var file = new BinaryWriter(File.Create(path));
         Span<byte> node = stackalloc byte[8];
-        for (var i = 0; i < nodeCount; i++)
+        for (var nodeIndex = 0; nodeIndex < nodeCount; nodeIndex++)
         {
-            BinaryPrimitives.WriteUInt32BigEndian(node, Record(left[i]));
-            BinaryPrimitives.WriteUInt32BigEndian(node[4..], Record(right[i]));
+            BinaryPrimitives.WriteUInt32BigEndian(node, Record(left[nodeIndex]));
+            BinaryPrimitives.WriteUInt32BigEndian(node[4..], Record(right[nodeIndex]));
             file.Write(node);
         }
 
@@ -97,12 +97,15 @@ public static class MaxMindWriter
         var node = 0;
         for (var depth = 0; depth < length; depth++)
         {
-            var one = ((bits >> (127 - depth)) & 1) != 0;
-            var child = one ? right[node] : left[node];
+            var bitIsOne = ((bits >> (127 - depth)) & 1) != 0;
+            var child = bitIsOne ? right[node] : left[node];
             if (depth == length - 1)
             {
                 // the networks come shortest first, so nothing longer lies below this point yet
-                if (one) right[node] = record; else left[node] = record;
+                if (bitIsOne)
+                    right[node] = record;
+                else
+                    left[node] = record;
                 return;
             }
 
@@ -112,7 +115,10 @@ public static class MaxMindWriter
                 left.Add(child);
                 right.Add(child);
                 var created = left.Count - 1;
-                if (one) right[node] = created; else left[node] = created;
+                if (bitIsOne)
+                    right[node] = created;
+                else
+                    left[node] = created;
                 child = created;
             }
 
@@ -146,7 +152,7 @@ public static class MaxMindWriter
     // an unsigned integer in as few bytes as it needs, as the format asks
     private static void UInt(List<byte> output, int type, uint value)
     {
-        var bytes = Big(value).SkipWhile(b => b == 0).ToArray();
+        var bytes = Big(value).SkipWhile(leadingByte => leadingByte == 0).ToArray();
         Control(output, type, bytes.Length);
         output.AddRange(bytes);
     }

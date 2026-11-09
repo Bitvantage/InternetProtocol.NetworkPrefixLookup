@@ -229,12 +229,12 @@ A batch must therefore end on the thread that started it.
 
 ### Batches
 
-During a batch the writer works on `_w`, a root that readers cannot see. A change copies every node on its path up to
+During a batch the writer works on `_writerRoot`, a root that readers cannot see. A change copies every node on its path up to
 that root, because changing a published parent in place would be visible. Subtree counts are adjusted only after those
 copies exist, so an abandoned batch leaves the published nodes untouched. `Commit` trims the private nodes' arrays to
 exact size, marks them shared, builds a new block array and publishes. A batch copies every node above a change, so a
 first octet whose depth-1 node is still the same object has nothing changed below it: its block is reused, and only the
-blocks under changed first octets are rebuilt. `Dispose` without `Commit` points `_w`
+blocks under changed first octets are rebuilt. `Dispose` without `Commit` points `_writerRoot`
 back at the published root.
 
 ### Building from a sequence

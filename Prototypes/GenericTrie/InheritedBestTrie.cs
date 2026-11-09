@@ -97,8 +97,10 @@ public sealed class InheritedBestTrie<TKey, TPrefix, TValue> where TKey : struct
 
     private void SetChild(int parent, bool slot, int child)
     {
-        if (slot) _nodes[parent].Child1 = child;
-        else _nodes[parent].Child0 = child;
+        if (slot)
+            _nodes[parent].Child1 = child;
+        else
+            _nodes[parent].Child0 = child;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -111,15 +113,19 @@ public sealed class InheritedBestTrie<TKey, TPrefix, TValue> where TKey : struct
         _nodes[node].Best = value;
 
         var stack = new Stack<int>();
-        if (_nodes[node].Child0 != 0) stack.Push(_nodes[node].Child0);
-        if (_nodes[node].Child1 != 0) stack.Push(_nodes[node].Child1);
-        while (stack.TryPop(out var d))
+        if (_nodes[node].Child0 != 0)
+            stack.Push(_nodes[node].Child0);
+        if (_nodes[node].Child1 != 0)
+            stack.Push(_nodes[node].Child1);
+        while (stack.TryPop(out var descendant))
         {
-            if (_ownValue[d] >= 0)
-                continue; // this subtree inherits from d, which is deeper
-            _nodes[d].Best = value;
-            if (_nodes[d].Child0 != 0) stack.Push(_nodes[d].Child0);
-            if (_nodes[d].Child1 != 0) stack.Push(_nodes[d].Child1);
+            if (_ownValue[descendant] >= 0)
+                continue; // this subtree inherits from descendant, which is deeper
+            _nodes[descendant].Best = value;
+            if (_nodes[descendant].Child0 != 0)
+                stack.Push(_nodes[descendant].Child0);
+            if (_nodes[descendant].Child1 != 0)
+                stack.Push(_nodes[descendant].Child1);
         }
     }
 
@@ -167,8 +173,8 @@ public sealed class InheritedBestTrie<TKey, TPrefix, TValue> where TKey : struct
             return true;
         }
 
-        var common = TKey.CommonPrefixLength(bits, _nodes[existing].Bits, Math.Min(length, _lengths[existing]));
-        var routing = NewNode(TKey.Truncate(bits, common), common, _nodes[parent].Best);
+        var commonLength = TKey.CommonPrefixLength(bits, _nodes[existing].Bits, Math.Min(length, _lengths[existing]));
+        var routing = NewNode(TKey.Truncate(bits, commonLength), commonLength, _nodes[parent].Best);
         SetChild(routing, TKey.IsSet(bits, _nodes[routing].Split), node);
         SetChild(routing, TKey.IsSet(_nodes[existing].Bits, _nodes[routing].Split), existing);
         SetChild(parent, slot, routing);
@@ -179,33 +185,35 @@ public sealed class InheritedBestTrie<TKey, TPrefix, TValue> where TKey : struct
     public void RelayoutDepthFirst()
     {
         var newIndex = new int[_nodeCount];
-        var visit = new int[_nodeCount];
+        var visitOrder = new int[_nodeCount];
         var count = 0;
-        visit[count++] = 0;
+        visitOrder[count++] = 0;
 
         var stack = new Stack<int>();
         stack.Push(Root);
-        while (stack.TryPop(out var i))
+        while (stack.TryPop(out var nodeIndex))
         {
-            visit[count++] = i;
-            if (_nodes[i].Child1 != 0) stack.Push(_nodes[i].Child1);
-            if (_nodes[i].Child0 != 0) stack.Push(_nodes[i].Child0);
+            visitOrder[count++] = nodeIndex;
+            if (_nodes[nodeIndex].Child1 != 0)
+                stack.Push(_nodes[nodeIndex].Child1);
+            if (_nodes[nodeIndex].Child0 != 0)
+                stack.Push(_nodes[nodeIndex].Child0);
         }
 
-        for (var i = 0; i < count; i++)
-            newIndex[visit[i]] = i;
+        for (var position = 0; position < count; position++)
+            newIndex[visitOrder[position]] = position;
 
         var nodes = new Node[_nodes.Length];
         var lengths = new int[_lengths.Length];
         var ownValue = new int[_ownValue.Length];
-        for (var i = 0; i < count; i++)
+        for (var position = 0; position < count; position++)
         {
-            var n = _nodes[visit[i]];
-            n.Child0 = newIndex[n.Child0];
-            n.Child1 = newIndex[n.Child1];
-            nodes[i] = n;
-            lengths[i] = _lengths[visit[i]];
-            ownValue[i] = _ownValue[visit[i]];
+            var node = _nodes[visitOrder[position]];
+            node.Child0 = newIndex[node.Child0];
+            node.Child1 = newIndex[node.Child1];
+            nodes[position] = node;
+            lengths[position] = _lengths[visitOrder[position]];
+            ownValue[position] = _ownValue[visitOrder[position]];
         }
 
         _nodes = nodes;
@@ -221,16 +229,16 @@ public sealed class InheritedBestTrie<TKey, TPrefix, TValue> where TKey : struct
         for (var top = 0; top < index.Length; top++)
         {
             var key = TKey.FromTopBits(top, bits);
-            var i = Root;
-            while (_lengths[i] < bits)
+            var nodeIndex = Root;
+            while (_lengths[nodeIndex] < bits)
             {
-                var next = ChildAt(ref _nodes[i], TKey.IsSet(key, _nodes[i].Split));
+                var next = ChildAt(ref _nodes[nodeIndex], TKey.IsSet(key, _nodes[nodeIndex].Split));
                 if (_lengths[next] > bits || !TKey.MatchesUnderMask(key, _nodes[next].Bits, _nodes[next].Mask))
                     break;
-                i = next;
+                nodeIndex = next;
             }
 
-            index[top] = i;
+            index[top] = nodeIndex;
         }
 
         _indexBits = bits;
@@ -243,15 +251,15 @@ public sealed class InheritedBestTrie<TKey, TPrefix, TValue> where TKey : struct
         ref var nodes = ref MemoryMarshal.GetArrayDataReference(_nodes);
 
         var index = _index;
-        var i = index != null ? Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(index), TKey.GetTopBits(key, _indexBits)) : Root;
+        var nodeIndex = index != null ? Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(index), TKey.GetTopBits(key, _indexBits)) : Root;
 
-        ref var n = ref Unsafe.Add(ref nodes, i);
+        ref var node = ref Unsafe.Add(ref nodes, nodeIndex);
         while (true)
         {
-            ref var c = ref Unsafe.Add(ref nodes, ChildAt(ref n, TKey.IsSet(key, n.Split)));
-            if (!TKey.MatchesUnderMask(key, c.Bits, c.Mask))
-                return n.Best;
-            n = ref c;
+            ref var child = ref Unsafe.Add(ref nodes, ChildAt(ref node, TKey.IsSet(key, node.Split)));
+            if (!TKey.MatchesUnderMask(key, child.Bits, child.Mask))
+                return node.Best;
+            node = ref child;
         }
     }
 

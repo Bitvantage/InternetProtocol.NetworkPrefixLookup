@@ -39,7 +39,7 @@ public interface IBitKey<TSelf> where TSelf : struct, IBitKey<TSelf>
     static abstract bool StartsWith(in TSelf key, in TSelf prefix, int length);
 
     /// <summary>Number of leading bits the two values share, capped at <paramref name="maxLength" />.</summary>
-    static abstract int CommonPrefixLength(in TSelf a, in TSelf b, int maxLength);
+    static abstract int CommonPrefixLength(in TSelf first, in TSelf second, int maxLength);
 
     // Operations that let a node cache its mask and split bit, as BitTrie does. Used by CachedKeyTrie.
 
@@ -87,7 +87,7 @@ public readonly struct Bits32 : IBitKey<Bits32>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool StartsWith(in Bits32 key, in Bits32 prefix, int length) => ((key.Value ^ prefix.Value) & Mask(length)) == 0;
 
-    public static int CommonPrefixLength(in Bits32 a, in Bits32 b, int maxLength) => Math.Min(BitOperations.LeadingZeroCount(a.Value ^ b.Value), maxLength);
+    public static int CommonPrefixLength(in Bits32 first, in Bits32 second, int maxLength) => Math.Min(BitOperations.LeadingZeroCount(first.Value ^ second.Value), maxLength);
 
     public static Bits32 MaskFor(int length) => new(Mask(length));
     public static Bits32 SplitFor(int length) => new(length >= 32 ? 0 : 0x8000_0000u >> length);
@@ -130,7 +130,7 @@ public readonly struct Bits128 : IBitKey<Bits128>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool StartsWith(in Bits128 key, in Bits128 prefix, int length) => ((key.Value ^ prefix.Value) & Mask(length)) == UInt128.Zero;
 
-    public static int CommonPrefixLength(in Bits128 a, in Bits128 b, int maxLength) => Math.Min((int)UInt128.LeadingZeroCount(a.Value ^ b.Value), maxLength);
+    public static int CommonPrefixLength(in Bits128 first, in Bits128 second, int maxLength) => Math.Min((int)UInt128.LeadingZeroCount(first.Value ^ second.Value), maxLength);
 
     public static Bits128 MaskFor(int length) => new(Mask(length));
     public static Bits128 SplitFor(int length) => new(length >= 128 ? UInt128.Zero : UInt128.One << (127 - length));
@@ -170,11 +170,13 @@ public struct Bits256 : IBitKey<Bits256>
     public static Bits256 Truncate(in Bits256 value, int length)
     {
         var result = value;
-        for (var i = 0; i < 4; i++)
+        for (var wordIndex = 0; wordIndex < 4; wordIndex++)
         {
-            var start = i * 64;
-            if (length <= start) result.Words[i] = 0;
-            else if (length < start + 64) result.Words[i] &= ulong.MaxValue << (64 - (length - start));
+            var start = wordIndex * 64;
+            if (length <= start)
+                result.Words[wordIndex] = 0;
+            else if (length < start + 64)
+                result.Words[wordIndex] &= ulong.MaxValue << (64 - (length - start));
         }
         return result;
     }
@@ -185,22 +187,22 @@ public struct Bits256 : IBitKey<Bits256>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool StartsWith(in Bits256 key, in Bits256 prefix, int length)
     {
-        var whole = length >> 6;
-        for (var i = 0; i < whole; i++)
-            if (key.Words[i] != prefix.Words[i])
+        var wholeWords = length >> 6;
+        for (var wordIndex = 0; wordIndex < wholeWords; wordIndex++)
+            if (key.Words[wordIndex] != prefix.Words[wordIndex])
                 return false;
 
-        var rest = length & 63;
-        return rest == 0 || (key.Words[whole] ^ prefix.Words[whole]) >> (64 - rest) == 0;
+        var remainingBits = length & 63;
+        return remainingBits == 0 || (key.Words[wholeWords] ^ prefix.Words[wholeWords]) >> (64 - remainingBits) == 0;
     }
 
-    public static int CommonPrefixLength(in Bits256 a, in Bits256 b, int maxLength)
+    public static int CommonPrefixLength(in Bits256 first, in Bits256 second, int maxLength)
     {
-        for (var i = 0; i < 4; i++)
+        for (var wordIndex = 0; wordIndex < 4; wordIndex++)
         {
-            var diff = a.Words[i] ^ b.Words[i];
-            if (diff != 0)
-                return Math.Min(i * 64 + BitOperations.LeadingZeroCount(diff), maxLength);
+            var difference = first.Words[wordIndex] ^ second.Words[wordIndex];
+            if (difference != 0)
+                return Math.Min(wordIndex * 64 + BitOperations.LeadingZeroCount(difference), maxLength);
         }
         return Math.Min(256, maxLength);
     }
@@ -225,25 +227,25 @@ public struct Bits256 : IBitKey<Bits256>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int GetTopBits(in Bits256 key, int count) => (int)(key.Words[0] >> (64 - count));
 
-    public static Bits256 FromTopBits(int top, int count) { var k = new Bits256(); k.Words[0] = (ulong)(uint)top << (64 - count); return k; }
+    public static Bits256 FromTopBits(int top, int count) { var result = new Bits256(); result.Words[0] = (ulong)(uint)top << (64 - count); return result; }
 
     public static int GetBits(in Bits256 key, int offset, int count)
     {
         var result = 0;
-        for (var i = 0; i < count; i++)
-            result = (result << 1) | (int)((key.Words[(offset + i) >> 6] >> (63 - ((offset + i) & 63))) & 1);
+        for (var bitIndex = 0; bitIndex < count; bitIndex++)
+            result = (result << 1) | (int)((key.Words[(offset + bitIndex) >> 6] >> (63 - ((offset + bitIndex) & 63))) & 1);
         return result;
     }
 
     public static Bits256 SetBits(in Bits256 key, int offset, int count, int value)
     {
         var result = key;
-        for (var i = 0; i < count; i++)
+        for (var bitIndex = 0; bitIndex < count; bitIndex++)
         {
-            var bit = (ulong)((value >> (count - 1 - i)) & 1);
-            var word = (offset + i) >> 6;
-            var shift = 63 - ((offset + i) & 63);
-            result.Words[word] = (result.Words[word] & ~(1UL << shift)) | (bit << shift);
+            var bit = (ulong)((value >> (count - 1 - bitIndex)) & 1);
+            var wordIndex = (offset + bitIndex) >> 6;
+            var shift = 63 - ((offset + bitIndex) & 63);
+            result.Words[wordIndex] = (result.Words[wordIndex] & ~(1UL << shift)) | (bit << shift);
         }
         return result;
     }
@@ -251,7 +253,13 @@ public struct Bits256 : IBitKey<Bits256>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static Vector256<ulong> AsVector(in Bits256 value) => Unsafe.As<Words4, Vector256<ulong>>(ref Unsafe.AsRef(in value.Words));
 
-    private static Words4 AllOnes() { var w = new Words4(); for (var i = 0; i < 4; i++) w[i] = ulong.MaxValue; return w; }
+    private static Words4 AllOnes()
+    {
+        var words = new Words4();
+        for (var wordIndex = 0; wordIndex < 4; wordIndex++)
+            words[wordIndex] = ulong.MaxValue;
+        return words;
+    }
 }
 
 /// <summary>
@@ -261,13 +269,13 @@ public struct Bits256 : IBitKey<Bits256>
 /// </summary>
 public readonly struct Bits192 : IBitKey<Bits192>
 {
-    public readonly ulong W0, W1, W2;
+    public readonly ulong Word0, Word1, Word2;
 
-    public Bits192(ulong w0, ulong w1, ulong w2)
+    public Bits192(ulong word0, ulong word1, ulong word2)
     {
-        W0 = w0;
-        W1 = w1;
-        W2 = w2;
+        Word0 = word0;
+        Word1 = word1;
+        Word2 = word2;
     }
 
     // mask for one 64-bit word that starts at bit index start
@@ -276,27 +284,30 @@ public readonly struct Bits192 : IBitKey<Bits192>
         length <= start ? 0 : length >= start + 64 ? ulong.MaxValue : ulong.MaxValue << (64 - (length - start));
 
     public static Bits192 Truncate(in Bits192 value, int length) =>
-        new(value.W0 & WordMask(length, 0), value.W1 & WordMask(length, 64), value.W2 & WordMask(length, 128));
+        new(value.Word0 & WordMask(length, 0), value.Word1 & WordMask(length, 64), value.Word2 & WordMask(length, 128));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool GetBit(in Bits192 value, int index)
     {
-        var word = index < 64 ? value.W0 : index < 128 ? value.W1 : index < 192 ? value.W2 : 0;
+        var word = index < 64 ? value.Word0 : index < 128 ? value.Word1 : index < 192 ? value.Word2 : 0;
         return (word << (index & 63) >> 63) != 0;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool StartsWith(in Bits192 key, in Bits192 prefix, int length) =>
-        (((key.W0 ^ prefix.W0) & WordMask(length, 0)) | ((key.W1 ^ prefix.W1) & WordMask(length, 64)) | ((key.W2 ^ prefix.W2) & WordMask(length, 128))) == 0;
+        (((key.Word0 ^ prefix.Word0) & WordMask(length, 0)) | ((key.Word1 ^ prefix.Word1) & WordMask(length, 64)) | ((key.Word2 ^ prefix.Word2) & WordMask(length, 128))) == 0;
 
-    public static int CommonPrefixLength(in Bits192 a, in Bits192 b, int maxLength)
+    public static int CommonPrefixLength(in Bits192 first, in Bits192 second, int maxLength)
     {
-        var d0 = a.W0 ^ b.W0;
-        if (d0 != 0) return Math.Min(BitOperations.LeadingZeroCount(d0), maxLength);
-        var d1 = a.W1 ^ b.W1;
-        if (d1 != 0) return Math.Min(64 + BitOperations.LeadingZeroCount(d1), maxLength);
-        var d2 = a.W2 ^ b.W2;
-        if (d2 != 0) return Math.Min(128 + BitOperations.LeadingZeroCount(d2), maxLength);
+        var difference0 = first.Word0 ^ second.Word0;
+        if (difference0 != 0)
+            return Math.Min(BitOperations.LeadingZeroCount(difference0), maxLength);
+        var difference1 = first.Word1 ^ second.Word1;
+        if (difference1 != 0)
+            return Math.Min(64 + BitOperations.LeadingZeroCount(difference1), maxLength);
+        var difference2 = first.Word2 ^ second.Word2;
+        if (difference2 != 0)
+            return Math.Min(128 + BitOperations.LeadingZeroCount(difference2), maxLength);
         return Math.Min(192, maxLength);
     }
 
@@ -310,42 +321,42 @@ public readonly struct Bits192 : IBitKey<Bits192>
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsSet(in Bits192 key, in Bits192 split) =>
-        ((key.W0 & split.W0) | (key.W1 & split.W1) | (key.W2 & split.W2)) != 0;
+        ((key.Word0 & split.Word0) | (key.Word1 & split.Word1) | (key.Word2 & split.Word2)) != 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool MatchesUnderMask(in Bits192 key, in Bits192 bits, in Bits192 mask) =>
-        (((key.W0 & mask.W0) ^ bits.W0) | ((key.W1 & mask.W1) ^ bits.W1) | ((key.W2 & mask.W2) ^ bits.W2)) == 0;
+        (((key.Word0 & mask.Word0) ^ bits.Word0) | ((key.Word1 & mask.Word1) ^ bits.Word1) | ((key.Word2 & mask.Word2) ^ bits.Word2)) == 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static int GetTopBits(in Bits192 key, int count) => (int)(key.W0 >> (64 - count));
+    public static int GetTopBits(in Bits192 key, int count) => (int)(key.Word0 >> (64 - count));
 
     public static Bits192 FromTopBits(int top, int count) => new((ulong)(uint)top << (64 - count), 0, 0);
 
-    private static ulong Word(in Bits192 k, int i) => i == 0 ? k.W0 : i == 1 ? k.W1 : k.W2;
+    private static ulong Word(in Bits192 key, int wordIndex) => wordIndex == 0 ? key.Word0 : wordIndex == 1 ? key.Word1 : key.Word2;
 
     public static int GetBits(in Bits192 key, int offset, int count)
     {
         var result = 0;
-        for (var i = 0; i < count; i++)
-            result = (result << 1) | (int)((Word(key, (offset + i) >> 6) >> (63 - ((offset + i) & 63))) & 1);
+        for (var bitIndex = 0; bitIndex < count; bitIndex++)
+            result = (result << 1) | (int)((Word(key, (offset + bitIndex) >> 6) >> (63 - ((offset + bitIndex) & 63))) & 1);
         return result;
     }
 
     public static Bits192 SetBits(in Bits192 key, int offset, int count, int value)
     {
-        ulong w0 = key.W0, w1 = key.W1, w2 = key.W2;
-        for (var i = 0; i < count; i++)
+        ulong word0 = key.Word0, word1 = key.Word1, word2 = key.Word2;
+        for (var bitIndex = 0; bitIndex < count; bitIndex++)
         {
-            var bit = (ulong)((value >> (count - 1 - i)) & 1);
-            var shift = 63 - ((offset + i) & 63);
-            switch ((offset + i) >> 6)
+            var bit = (ulong)((value >> (count - 1 - bitIndex)) & 1);
+            var shift = 63 - ((offset + bitIndex) & 63);
+            switch ((offset + bitIndex) >> 6)
             {
-                case 0: w0 = (w0 & ~(1UL << shift)) | (bit << shift); break;
-                case 1: w1 = (w1 & ~(1UL << shift)) | (bit << shift); break;
-                default: w2 = (w2 & ~(1UL << shift)) | (bit << shift); break;
+                case 0: word0 = (word0 & ~(1UL << shift)) | (bit << shift); break;
+                case 1: word1 = (word1 & ~(1UL << shift)) | (bit << shift); break;
+                default: word2 = (word2 & ~(1UL << shift)) | (bit << shift); break;
             }
         }
-        return new(w0, w1, w2);
+        return new(word0, word1, word2);
     }
 }
 
@@ -361,12 +372,15 @@ public readonly struct BitsVar : IBitKey<BitsVar>
     public static BitsVar Truncate(in BitsVar value, int length)
     {
         var words = new ulong[value.Words.Length];
-        for (var i = 0; i < words.Length; i++)
+        for (var wordIndex = 0; wordIndex < words.Length; wordIndex++)
         {
-            var start = i * 64;
-            if (length <= start) words[i] = 0;
-            else if (length < start + 64) words[i] = value.Words[i] & ulong.MaxValue << (64 - (length - start));
-            else words[i] = value.Words[i];
+            var start = wordIndex * 64;
+            if (length <= start)
+                words[wordIndex] = 0;
+            else if (length < start + 64)
+                words[wordIndex] = value.Words[wordIndex] & ulong.MaxValue << (64 - (length - start));
+            else
+                words[wordIndex] = value.Words[wordIndex];
         }
         return new BitsVar(words);
     }
@@ -377,26 +391,26 @@ public readonly struct BitsVar : IBitKey<BitsVar>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool StartsWith(in BitsVar key, in BitsVar prefix, int length)
     {
-        var k = key.Words;
-        var p = prefix.Words;
-        var whole = length >> 6;
-        for (var i = 0; i < whole; i++)
-            if (k[i] != p[i])
+        var keyWords = key.Words;
+        var prefixWords = prefix.Words;
+        var wholeWords = length >> 6;
+        for (var wordIndex = 0; wordIndex < wholeWords; wordIndex++)
+            if (keyWords[wordIndex] != prefixWords[wordIndex])
                 return false;
 
-        var rest = length & 63;
-        return rest == 0 || (k[whole] ^ p[whole]) >> (64 - rest) == 0;
+        var remainingBits = length & 63;
+        return remainingBits == 0 || (keyWords[wholeWords] ^ prefixWords[wholeWords]) >> (64 - remainingBits) == 0;
     }
 
-    public static int CommonPrefixLength(in BitsVar a, in BitsVar b, int maxLength)
+    public static int CommonPrefixLength(in BitsVar first, in BitsVar second, int maxLength)
     {
-        for (var i = 0; i < a.Words.Length; i++)
+        for (var wordIndex = 0; wordIndex < first.Words.Length; wordIndex++)
         {
-            var diff = a.Words[i] ^ b.Words[i];
-            if (diff != 0)
-                return Math.Min(i * 64 + BitOperations.LeadingZeroCount(diff), maxLength);
+            var difference = first.Words[wordIndex] ^ second.Words[wordIndex];
+            if (difference != 0)
+                return Math.Min(wordIndex * 64 + BitOperations.LeadingZeroCount(difference), maxLength);
         }
-        return Math.Min(a.Words.Length * 64, maxLength);
+        return Math.Min(first.Words.Length * 64, maxLength);
     }
 
     // the variable-width type cannot know the width here, so the study data's 256 bits are assumed
@@ -412,16 +426,16 @@ public readonly struct BitsVar : IBitKey<BitsVar>
 
     public static bool IsSet(in BitsVar key, in BitsVar split)
     {
-        for (var i = 0; i < key.Words.Length; i++)
-            if ((key.Words[i] & split.Words[i]) != 0)
+        for (var wordIndex = 0; wordIndex < key.Words.Length; wordIndex++)
+            if ((key.Words[wordIndex] & split.Words[wordIndex]) != 0)
                 return true;
         return false;
     }
 
     public static bool MatchesUnderMask(in BitsVar key, in BitsVar bits, in BitsVar mask)
     {
-        for (var i = 0; i < key.Words.Length; i++)
-            if ((key.Words[i] & mask.Words[i]) != bits.Words[i])
+        for (var wordIndex = 0; wordIndex < key.Words.Length; wordIndex++)
+            if ((key.Words[wordIndex] & mask.Words[wordIndex]) != bits.Words[wordIndex])
                 return false;
         return true;
     }
@@ -433,19 +447,19 @@ public readonly struct BitsVar : IBitKey<BitsVar>
     public static int GetBits(in BitsVar key, int offset, int count)
     {
         var result = 0;
-        for (var i = 0; i < count; i++)
-            result = (result << 1) | (int)((key.Words[(offset + i) >> 6] >> (63 - ((offset + i) & 63))) & 1);
+        for (var bitIndex = 0; bitIndex < count; bitIndex++)
+            result = (result << 1) | (int)((key.Words[(offset + bitIndex) >> 6] >> (63 - ((offset + bitIndex) & 63))) & 1);
         return result;
     }
 
     public static BitsVar SetBits(in BitsVar key, int offset, int count, int value)
     {
         var words = (ulong[])key.Words.Clone();
-        for (var i = 0; i < count; i++)
+        for (var bitIndex = 0; bitIndex < count; bitIndex++)
         {
-            var bit = (ulong)((value >> (count - 1 - i)) & 1);
-            var shift = 63 - ((offset + i) & 63);
-            words[(offset + i) >> 6] = (words[(offset + i) >> 6] & ~(1UL << shift)) | (bit << shift);
+            var bit = (ulong)((value >> (count - 1 - bitIndex)) & 1);
+            var shift = 63 - ((offset + bitIndex) & 63);
+            words[(offset + bitIndex) >> 6] = (words[(offset + bitIndex) >> 6] & ~(1UL << shift)) | (bit << shift);
         }
         return new BitsVar(words);
     }
@@ -506,10 +520,10 @@ public sealed class KeyTrie<TKey, TPrefix, TValue> where TKey : struct, IBitKey<
             return true;
         }
 
-        var common = TKey.CommonPrefixLength(bits, existing.Bits, Math.Min(length, existing.Length));
-        var routing = new Node(TKey.Truncate(bits, common), common);
-        routing.Children[TKey.GetBit(bits, common) ? 1 : 0] = node;
-        routing.Children[TKey.GetBit(existing.Bits, common) ? 1 : 0] = existing;
+        var commonLength = TKey.CommonPrefixLength(bits, existing.Bits, Math.Min(length, existing.Length));
+        var routing = new Node(TKey.Truncate(bits, commonLength), commonLength);
+        routing.Children[TKey.GetBit(bits, commonLength) ? 1 : 0] = node;
+        routing.Children[TKey.GetBit(existing.Bits, commonLength) ? 1 : 0] = existing;
         parent.Children[slot] = routing;
         Count++;
         return true;
@@ -546,11 +560,15 @@ public sealed class KeyTrie<TKey, TPrefix, TValue> where TKey : struct, IBitKey<
         int value = 0, routing = 0;
         var stack = new Stack<Node>();
         stack.Push(_root);
-        while (stack.TryPop(out var n))
+        while (stack.TryPop(out var node))
         {
-            if (n.HasValue) value++; else routing++;
-            foreach (var c in n.Children)
-                if (c != null) stack.Push(c);
+            if (node.HasValue)
+                value++;
+            else
+                routing++;
+            foreach (var child in node.Children)
+                if (child != null)
+                    stack.Push(child);
         }
         return (value, routing);
     }
@@ -622,8 +640,8 @@ public sealed class CachedKeyTrie<TKey, TPrefix, TValue> where TKey : struct, IB
             return true;
         }
 
-        var common = TKey.CommonPrefixLength(bits, existing.Bits, Math.Min(length, existing.Length));
-        var routing = new Node(TKey.Truncate(bits, common), common);
+        var commonLength = TKey.CommonPrefixLength(bits, existing.Bits, Math.Min(length, existing.Length));
+        var routing = new Node(TKey.Truncate(bits, commonLength), commonLength);
         routing.Children[TKey.IsSet(bits, routing.Split) ? 1 : 0] = node;
         routing.Children[TKey.IsSet(existing.Bits, routing.Split) ? 1 : 0] = existing;
         parent.Children[slot] = routing;

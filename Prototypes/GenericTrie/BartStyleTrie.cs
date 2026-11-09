@@ -74,31 +74,31 @@ public sealed class BartStyleTrie<TKey> where TKey : struct, IBitKey<TKey>
     public void Insert(in TKey bits, int length, int value)
     {
         var key = TKey.Truncate(bits, length);
-        var n = _root;
+        var node = _root;
         for (var depth = 0; ; depth++)
         {
             var octet = TKey.GetBits(key, depth * 8, 8);
-            var relative = length - depth * 8;
-            if (relative < 8)
+            var relativeLength = length - depth * 8;
+            if (relativeLength < 8)
             {
-                SetPrefix(n, PrefixToIndex(octet, relative), value);
+                SetPrefix(node, PrefixToIndex(octet, relativeLength), value);
                 return;
             }
 
-            if (!n.Children.Test(octet))
+            if (!node.Children.Test(octet))
             {
-                InsertChild(n, octet, relative == 8 ? new Fringe(value) : new Leaf(key, length, value));
+                InsertChild(node, octet, relativeLength == 8 ? new Fringe(value) : new Leaf(key, length, value));
                 return;
             }
 
-            var at = n.Children.Rank(octet) - 1;
-            switch (n.ChildArray[at])
+            var childIndex = node.Children.Rank(octet) - 1;
+            switch (node.ChildArray[childIndex])
             {
                 case Node child:
-                    n = child;
+                    node = child;
                     continue;
 
-                case Fringe fringe when relative == 8:
+                case Fringe fringe when relativeLength == 8:
                     fringe.Value = value;
                     return;
 
@@ -108,8 +108,8 @@ public sealed class BartStyleTrie<TKey> where TKey : struct, IBitKey<TKey>
                     var child = new Node();
                     NodeCount++;
                     SetPrefix(child, 1, fringe.Value);
-                    n.ChildArray[at] = child;
-                    n = child;
+                    node.ChildArray[childIndex] = child;
+                    node = child;
                     continue;
                 }
 
@@ -122,43 +122,46 @@ public sealed class BartStyleTrie<TKey> where TKey : struct, IBitKey<TKey>
                     // push the leaf down into a new node, then keep inserting below
                     var child = new Node();
                     NodeCount++;
-                    n.ChildArray[at] = child;
+                    node.ChildArray[childIndex] = child;
                     InsertBelow(child, depth + 1, leaf.Bits, leaf.Length, leaf.Value);
-                    n = child;
+                    node = child;
                     continue;
                 }
             }
         }
     }
 
-    // inserts into the subtree rooted at node n, which sits at the given depth
-    private void InsertBelow(Node n, int depth, TKey key, int length, int value)
+    // inserts into the subtree rooted at node, which sits at the given depth
+    private void InsertBelow(Node node, int depth, TKey key, int length, int value)
     {
         var octet = TKey.GetBits(key, depth * 8, 8);
-        var relative = length - depth * 8;
-        if (relative < 8) SetPrefix(n, PrefixToIndex(octet, relative), value);
-        else InsertChild(n, octet, relative == 8 ? new Fringe(value) : new Leaf(key, length, value));
+        var relativeLength = length - depth * 8;
+        if (relativeLength < 8)
+            SetPrefix(node, PrefixToIndex(octet, relativeLength), value);
+        else
+            InsertChild(node, octet, relativeLength == 8 ? new Fringe(value) : new Leaf(key, length, value));
     }
 
     /// <summary>The value of the longest stored prefix that contains the key, or -1.</summary>
     public int Lookup(in TKey key)
     {
         var stack = new NodeStack();
-        var n = _root;
+        var node = _root;
         var depth = 0;
-        var last = _width / 8 - 1;
+        var lastDepth = _width / 8 - 1;
         for (; ; depth++)
         {
-            stack[depth] = n;
+            stack[depth] = node;
             var octet = TKey.GetBits(key, depth * 8, 8);
-            if (!n.Children.Test(octet))
+            if (!node.Children.Test(octet))
                 break;
 
-            var kid = n.ChildArray[n.Children.Rank(octet) - 1];
+            var kid = node.ChildArray[node.Children.Rank(octet) - 1];
             if (kid is Node child)
             {
-                n = child;
-                if (depth == last) break; // cannot happen with fringes, kept for safety
+                node = child;
+                if (depth == lastDepth)
+                    break; // cannot happen with fringes, kept for safety
                 continue;
             }
 
@@ -174,12 +177,12 @@ public sealed class BartStyleTrie<TKey> where TKey : struct, IBitKey<TKey>
         // the deepest node first: the first match found is the longest
         for (; depth >= 0; depth--)
         {
-            n = stack[depth];
-            if (n.PrefixValues.Length == 0)
+            node = stack[depth];
+            if (node.PrefixValues.Length == 0)
                 continue;
             var index = (TKey.GetBits(key, depth * 8, 8) >> 1) + 128; // the octet's index at relative length 7
-            if (n.Prefixes.AndTop(in AncestorTable[index], out var top))
-                return n.PrefixValues[n.Prefixes.Rank(top) - 1];
+            if (node.Prefixes.AndTop(in AncestorTable[index], out var top))
+                return node.PrefixValues[node.Prefixes.Rank(top) - 1];
         }
 
         return -1;
@@ -191,15 +194,18 @@ public sealed class BartStyleTrie<TKey> where TKey : struct, IBitKey<TKey>
         long bytes = 0;
         var stack = new Stack<Node>();
         stack.Push(_root);
-        while (stack.TryPop(out var n))
+        while (stack.TryPop(out var node))
         {
             bytes += 16 + 32 + 8 + 32 + 8; // object header, two sets, two array references
-            bytes += 24 + 4L * n.PrefixValues.Length + 24 + 8L * n.ChildArray.Length;
-            foreach (var kid in n.ChildArray)
+            bytes += 24 + 4L * node.PrefixValues.Length + 24 + 8L * node.ChildArray.Length;
+            foreach (var kid in node.ChildArray)
             {
-                if (kid is Node child) stack.Push(child);
-                else if (kid is Fringe) bytes += 24;
-                else bytes += 16 + 3 * Unsafe.SizeOf<TKey>() + 8;
+                if (kid is Node child)
+                    stack.Push(child);
+                else if (kid is Fringe)
+                    bytes += 24;
+                else
+                    bytes += 16 + 3 * Unsafe.SizeOf<TKey>() + 8;
             }
         }
         return bytes;
@@ -207,30 +213,30 @@ public sealed class BartStyleTrie<TKey> where TKey : struct, IBitKey<TKey>
 
     private static int PrefixToIndex(int octet, int relativeLength) => (octet >> (8 - relativeLength)) + (1 << relativeLength);
 
-    private static void SetPrefix(Node n, int index, int value)
+    private static void SetPrefix(Node node, int index, int value)
     {
-        if (n.Prefixes.Test(index))
+        if (node.Prefixes.Test(index))
         {
-            n.PrefixValues[n.Prefixes.Rank(index) - 1] = value;
+            node.PrefixValues[node.Prefixes.Rank(index) - 1] = value;
             return;
         }
 
-        n.Prefixes.Set(index);
-        n.PrefixValues = InsertAt(n.PrefixValues, n.Prefixes.Rank(index) - 1, value);
+        node.Prefixes.Set(index);
+        node.PrefixValues = InsertAt(node.PrefixValues, node.Prefixes.Rank(index) - 1, value);
     }
 
-    private void InsertChild(Node n, int octet, Kid kid)
+    private void InsertChild(Node node, int octet, Kid kid)
     {
-        n.Children.Set(octet);
-        n.ChildArray = InsertAt(n.ChildArray, n.Children.Rank(octet) - 1, kid);
+        node.Children.Set(octet);
+        node.ChildArray = InsertAt(node.ChildArray, node.Children.Rank(octet) - 1, kid);
     }
 
-    private static T[] InsertAt<T>(T[] array, int at, T item)
+    private static T[] InsertAt<T>(T[] array, int position, T item)
     {
         var result = new T[array.Length + 1];
-        Array.Copy(array, 0, result, 0, at);
-        result[at] = item;
-        Array.Copy(array, at, result, at + 1, array.Length - at);
+        Array.Copy(array, 0, result, 0, position);
+        result[position] = item;
+        Array.Copy(array, position, result, position + 1, array.Length - position);
         return result;
     }
 
@@ -240,9 +246,9 @@ public sealed class BartStyleTrie<TKey> where TKey : struct, IBitKey<TKey>
     private static BitSet256[] BuildAncestorTable()
     {
         var table = new BitSet256[256];
-        for (var i = 1; i < 256; i++)
-            for (var j = i; j > 0; j >>= 1)
-                table[i].Set(j);
+        for (var index = 1; index < 256; index++)
+            for (var ancestor = index; ancestor > 0; ancestor >>= 1)
+                table[index].Set(ancestor);
         return table;
     }
 }
@@ -251,55 +257,55 @@ public sealed class BartStyleTrie<TKey> where TKey : struct, IBitKey<TKey>
 [StructLayout(LayoutKind.Sequential)]
 public struct BitSet256
 {
-    public ulong W0, W1, W2, W3;
+    public ulong Word0, Word1, Word2, Word3;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public readonly bool Test(int bit) => ((Unsafe.Add(ref Unsafe.AsRef(in W0), bit >> 6) >> (bit & 63)) & 1) != 0;
+    public readonly bool Test(int bit) => ((Unsafe.Add(ref Unsafe.AsRef(in Word0), bit >> 6) >> (bit & 63)) & 1) != 0;
 
-    public void Set(int bit) => Unsafe.Add(ref W0, bit >> 6) |= 1UL << (bit & 63);
+    public void Set(int bit) => Unsafe.Add(ref Word0, bit >> 6) |= 1UL << (bit & 63);
 
-    public void Clear(int bit) => Unsafe.Add(ref W0, bit >> 6) &= ~(1UL << (bit & 63));
+    public void Clear(int bit) => Unsafe.Add(ref Word0, bit >> 6) &= ~(1UL << (bit & 63));
 
-    public readonly bool IsEmpty => (W0 | W1 | W2 | W3) == 0;
+    public readonly bool IsEmpty => (Word0 | Word1 | Word2 | Word3) == 0;
 
-    public readonly int PopCount() => BitOperations.PopCount(W0) + BitOperations.PopCount(W1) + BitOperations.PopCount(W2) + BitOperations.PopCount(W3);
+    public readonly int PopCount() => BitOperations.PopCount(Word0) + BitOperations.PopCount(Word1) + BitOperations.PopCount(Word2) + BitOperations.PopCount(Word3);
 
     /// <summary>The lowest set bit, or 256 when the set is empty.</summary>
     public readonly int First() =>
-        W0 != 0 ? BitOperations.TrailingZeroCount(W0) : W1 != 0 ? 64 + BitOperations.TrailingZeroCount(W1)
-        : W2 != 0 ? 128 + BitOperations.TrailingZeroCount(W2) : W3 != 0 ? 192 + BitOperations.TrailingZeroCount(W3) : 256;
+        Word0 != 0 ? BitOperations.TrailingZeroCount(Word0) : Word1 != 0 ? 64 + BitOperations.TrailingZeroCount(Word1)
+        : Word2 != 0 ? 128 + BitOperations.TrailingZeroCount(Word2) : Word3 != 0 ? 192 + BitOperations.TrailingZeroCount(Word3) : 256;
 
     /// <summary>The number of set bits at or below <paramref name="bit" />.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly int Rank(int bit)
     {
-        ref var m = ref RankMasks[bit * 4];
-        return BitOperations.PopCount(W0 & m) + BitOperations.PopCount(W1 & Unsafe.Add(ref m, 1))
-             + BitOperations.PopCount(W2 & Unsafe.Add(ref m, 2)) + BitOperations.PopCount(W3 & Unsafe.Add(ref m, 3));
+        ref var wordMasks = ref RankMasks[bit * 4];
+        return BitOperations.PopCount(Word0 & wordMasks) + BitOperations.PopCount(Word1 & Unsafe.Add(ref wordMasks, 1))
+             + BitOperations.PopCount(Word2 & Unsafe.Add(ref wordMasks, 2)) + BitOperations.PopCount(Word3 & Unsafe.Add(ref wordMasks, 3));
     }
 
     /// <summary>The highest bit set in both sets, if any.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public readonly bool AndTop(in BitSet256 other, out int top)
     {
-        ulong a;
-        if ((a = W3 & other.W3) != 0) { top = 255 - BitOperations.LeadingZeroCount(a); return true; }
-        if ((a = W2 & other.W2) != 0) { top = 191 - BitOperations.LeadingZeroCount(a); return true; }
-        if ((a = W1 & other.W1) != 0) { top = 127 - BitOperations.LeadingZeroCount(a); return true; }
-        if ((a = W0 & other.W0) != 0) { top = 63 - BitOperations.LeadingZeroCount(a); return true; }
+        ulong commonBits;
+        if ((commonBits = Word3 & other.Word3) != 0) { top = 255 - BitOperations.LeadingZeroCount(commonBits); return true; }
+        if ((commonBits = Word2 & other.Word2) != 0) { top = 191 - BitOperations.LeadingZeroCount(commonBits); return true; }
+        if ((commonBits = Word1 & other.Word1) != 0) { top = 127 - BitOperations.LeadingZeroCount(commonBits); return true; }
+        if ((commonBits = Word0 & other.Word0) != 0) { top = 63 - BitOperations.LeadingZeroCount(commonBits); return true; }
         top = 0;
         return false;
     }
 
-    // RankMasks[bit * 4 + w]: the bits of word w at or below bit
+    // RankMasks[bit * 4 + wordIndex]: the bits of word wordIndex at or below bit
     private static readonly ulong[] RankMasks = BuildRankMasks();
 
     private static ulong[] BuildRankMasks()
     {
         var masks = new ulong[256 * 4];
         for (var bit = 0; bit < 256; bit++)
-            for (var w = 0; w < 4; w++)
-                masks[bit * 4 + w] = w < bit >> 6 ? ulong.MaxValue : w == bit >> 6 ? ulong.MaxValue >> (63 - (bit & 63)) : 0;
+            for (var wordIndex = 0; wordIndex < 4; wordIndex++)
+                masks[bit * 4 + wordIndex] = wordIndex < bit >> 6 ? ulong.MaxValue : wordIndex == bit >> 6 ? ulong.MaxValue >> (63 - (bit & 63)) : 0;
         return masks;
     }
 }
