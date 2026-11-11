@@ -1,6 +1,6 @@
 ﻿/*
    Bitvantage.InternetProtocol.NetworkPrefixLookup
-   Copyright (C) Michael Crino
+   Copyright (C) 2024-2026 Michael Crino
 
    Licensed under the MIT License. See LICENSE.md in the repository root.
 */
@@ -288,7 +288,13 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private bool Settled(long before)
     {
+#if NET10_0_OR_GREATER
         Volatile.ReadBarrier();
+#else
+        // PERF: .NET 8 has no read barrier, so the lookup's reads are ordered before the second read of _changes by a
+        // full fence, which costs more
+        Interlocked.MemoryBarrier();
+#endif
         return Volatile.Read(ref _changes) - (before & ~1L) <= 2;
     }
 

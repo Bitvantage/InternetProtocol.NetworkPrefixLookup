@@ -3,13 +3,13 @@
 	<Import Project="../Packaging.props" />
 
 	<PropertyGroup>
-		<TargetFramework>net10.0</TargetFramework>
+		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+		<LangVersion>14</LangVersion>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<RootNamespace>Bitvantage.InternetProtocol.NetworkPrefixLookup</RootNamespace>
-		<Title>Bitvantage.InternetProtocol.NetworkPrefixLookup</Title>
-		<PackageTags>ip;ipv4;ipv6;ipaddress;ipnetwork;cidr;subnet;prefix;longest-prefix-match;lpm;ip-lookup;routing-table;trie;radix-tree</PackageTags>
+		<PackageTags>ip;ipv4;ipv6;ipaddress;ipnetwork;cidr;subnet;prefix;longest-prefix-match;lpm;ip-lookup;trie;radix-tree</PackageTags>
 		<Description>Fast longest-prefix-match lookups for IPv4 and IPv6: find the most specific stored network that contains an address or a network. Works with System.Net.IPNetwork or your own network type. Reads take no locks while writes run, single lookups allocate nothing, and frozen tables make read-only data faster still. No dependencies.</Description>
 	</PropertyGroup>
 

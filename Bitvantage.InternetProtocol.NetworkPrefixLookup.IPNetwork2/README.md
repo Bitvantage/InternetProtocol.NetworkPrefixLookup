@@ -8,6 +8,12 @@ that network.
 dotnet add package Bitvantage.InternetProtocol.NetworkPrefixLookup.IPNetwork2
 ```
 
+Or from the NuGet Package Manager console:
+
+```
+PM> NuGet\Install-Package Bitvantage.InternetProtocol.NetworkPrefixLookup.IPNetwork2
+```
+
 ```csharp
 using System.Net;
 using Bitvantage.InternetProtocol.NetworkPrefixLookup;

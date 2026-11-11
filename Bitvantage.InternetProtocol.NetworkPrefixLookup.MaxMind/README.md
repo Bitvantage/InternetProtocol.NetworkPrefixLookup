@@ -8,6 +8,12 @@ record once and builds a longest-prefix-match lookup from the networks.
 dotnet add package Bitvantage.InternetProtocol.NetworkPrefixLookup.MaxMind
 ```
 
+Or from the NuGet Package Manager console:
+
+```
+PM> NuGet\Install-Package Bitvantage.InternetProtocol.NetworkPrefixLookup.MaxMind
+```
+
 ```csharp
 using System.Net;
 using Bitvantage.InternetProtocol.NetworkPrefixLookup;

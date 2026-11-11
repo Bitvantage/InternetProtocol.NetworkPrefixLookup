@@ -1,6 +1,6 @@
 ﻿/*
    Bitvantage.InternetProtocol.NetworkPrefixLookup
-   Copyright (C) Michael Crino
+   Copyright (C) 2024-2026 Michael Crino
 
    Licensed under the MIT License. See LICENSE.md in the repository root.
 */
@@ -81,7 +81,7 @@ public class IPNetworkLookupTests
         foreach (var set in sets)
         {
             var expected = Lookup(set).ToTextTree(AddressFamily.InterNetwork);
-            Assert.That(Lookup(set.Reverse().ToArray()).ToTextTree(AddressFamily.InterNetwork), Is.EqualTo(expected), string.Join(", ", set));
+            Assert.That(Lookup(Enumerable.Reverse(set).ToArray()).ToTextTree(AddressFamily.InterNetwork), Is.EqualTo(expected), string.Join(", ", set));
             foreach (var network in set)
             {
                 var parsedNetwork = N(network);
@@ -98,9 +98,10 @@ public class IPNetworkLookupTests
     public void Order_and_removal_do_not_change_the_shape()
     {
         var random = new Random(55);
+        // .NET 8's IPNetwork refuses an address with bits set after the prefix, so they are cleared before it is created
         var networks = Enumerable.Range(0, 20000)
-            .Select(_ => new IPNetwork(new IPAddress(random.NextInt64(0, 1L << 32)), (int)Math.Cbrt(random.Next(0, 33 * 33 * 33))))
-            .Select(randomNetwork => new IPNetwork(IPAddressBits.FromIPv4Bits(IPAddressBits.ToIPv4Bits(randomNetwork.BaseAddress) & (uint)(0xFFFFFFFF00000000UL >> randomNetwork.PrefixLength)), randomNetwork.PrefixLength))
+            .Select(_ => (Address: new IPAddress(random.NextInt64(0, 1L << 32)), PrefixLength: (int)Math.Cbrt(random.Next(0, 33 * 33 * 33))))
+            .Select(randomNetwork => new IPNetwork(IPAddressBits.FromIPv4Bits(IPAddressBits.ToIPv4Bits(randomNetwork.Address) & (uint)(0xFFFFFFFF00000000UL >> randomNetwork.PrefixLength)), randomNetwork.PrefixLength))
             .Distinct().Take(10000).ToList();
         var keep = networks.Take(8000).ToList();
 

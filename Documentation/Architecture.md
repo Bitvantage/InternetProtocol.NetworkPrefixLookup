@@ -35,14 +35,14 @@ contains a given prefix, and look prefixes up exactly.
 | `….NetworkPrefixLookup.MaxMind` | `MaxMindNetworkLookup<TValue>` and `MaxMindDatabase.Load` | `MaxMind.Db` |
 
 [Adapter-Survey.md](Adapter-Survey.md) explains why these libraries get packages. Ranges with arbitrary ends, such as
-`192.168.0.10-192.168.0.20`, are left to a separate library. All projects target .NET 10 only.
+`192.168.0.10-192.168.0.20`, are left to a separate library. The packages target .NET 8 and .NET 10.
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
 | `Bitvantage.InternetProtocol.NetworkPrefixLookup/Keys/` | `IBitKey<TSelf>`, `Bits32` and `Bits128` |
-| `Bitvantage.InternetProtocol.NetworkPrefixLookup/Core/` | `BitTrie`, `FrozenBitTrie`, `IReadOnlyBitTrie`, `BitSet256` and the ART tables, `PrefixEntry`, `NoValue` |
+| `Bitvantage.InternetProtocol.NetworkPrefixLookup/Core/` | `BitTrie`, `FrozenBitTrie`, `IReadOnlyBitTrie`, `BitSet256` and the ART tables, `PrefixEntry`, `NoValue`, and `Lock` for .NET 8 |
 | `Bitvantage.InternetProtocol.NetworkPrefixLookup/IP/` | The adapter interface, `IPAddressBits`, `IPPrefixLookup` and its frozen form, the internal `IPLookupReader` they share, `IPNetworkLookup` |
 | `Bitvantage.InternetProtocol.NetworkPrefixLookup.*/` | One adapter package each, with the README of its package page |
 | `Packaging.props` | Package metadata, version, Source Link and package validation shared by the three library projects |
@@ -218,7 +218,9 @@ new root and a new block array privately and publish both with one reference wri
   running flat out, the chance is about a lookup's time over a write's, so on the real tables, with lookups of 80 to
   200 ns and writes of about 0.8 µs, roughly one lookup in five to ten retries once, and few twice; each retry costs
   about one lookup. On x86 the check is two loads and a compare, and measured free on the real tables; see
-  [Performance](#measured-baseline). `Version` is `_changes` halved, and must be read before the lookups it is to
+  [Performance](#measured-baseline). .NET 8 has no `Volatile.ReadBarrier`, so there a full fence takes its place.
+  On x64 that cost nothing measurable: read-write and frozen lookups, which take no fence, were both about a fifth
+  slower on .NET 8 than on .NET 10. `Version` is `_changes` halved, and must be read before the lookups it is to
   vouch for.
 - A batch is all or nothing. Readers keep seeing the published root and blocks until the commit replaces both at once.
 - Enumeration and `GetSubnets` during writes see each entry whole, but are not a snapshot of the whole trie at one
@@ -228,7 +230,8 @@ new root and a new block array privately and publish both with one reference wri
 
 Writes take an internal `System.Threading.Lock`, so there is no separate concurrent class. The lock is re-entrant,
 which batches rely on: `BeginBatch` holds it until `Commit` or `Dispose`, and writes made in the batch enter it again.
-A batch must therefore end on the thread that started it.
+A batch must therefore end on the thread that started it. .NET 8 has no `System.Threading.Lock`, so there an internal
+`Lock` class with the same members stands in for it, built on `Monitor`, which is re-entrant and owned by a thread too.
 
 ### Batches
 
@@ -1048,6 +1051,9 @@ a symbol package, so a debugger can step into the source of the commit they were
 - **Batches are atomic per address family**, not across both. A frozen copy does hold both families at one moment.
 - **IPv6 scope IDs are ignored**, so `fe80::1%7` and `fe80::1%9` are one key.
 - **Enumeration and `GetSubnets` are not snapshots** while writes run.
+- **Lookups on .NET 8 take about a fifth longer** than on .NET 10. On 500,000 random IPv4 prefixes on the Ryzen,
+  measured on 2026-11-11 in one BenchmarkDotNet session, a read-write lookup took 34.0 ns against 27.6 ns and a frozen
+  one 12.7 ns against 10.5 ns; neither allocated. The measured numbers in this document are from .NET 10.
 
 The known issues of version 2, listed in [Architecture-v2.md](Architecture-v2.md#known-issues), do not apply: the code
 they describe is gone, and the tests cover `Count`, removal of absent prefixes, `Clear`, `GetOrAdd` and enumeration.

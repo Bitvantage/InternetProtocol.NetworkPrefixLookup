@@ -23,7 +23,7 @@ on top of it, and adapter packages connect other libraries' network types.
 
 - The packages are licensed under the MIT License. Versions before 3.0.0 remain under the GNU Affero General Public
   License v3.0.
-- The packages target .NET 10 only.
+- The packages target .NET 8 and .NET 10.
 - Every type is in the namespace `Bitvantage.InternetProtocol.NetworkPrefixLookup`.
 - Readers take no locks while a writer works, and writes are serialized internally.
 

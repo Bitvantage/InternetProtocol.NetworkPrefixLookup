@@ -16,7 +16,8 @@ replaced.
 
 Decisions made by the user:
 
-- Target .NET 10 only.
+- Target .NET 8 and .NET 10. .NET 8 lacks `System.Threading.Lock` and `Volatile.ReadBarrier`, so `Core/Lock.cs` stands
+  in for the lock there and the read-write lookups take a full fence instead of the read barrier.
 - Backward compatibility with the v2 public API is not required.
 - The core ships as a package with no dependencies.
 - No `NetworkPrefix` adapter: `Bitvantage.InternetProtocol.NetworkPrefix` is being retired, because
@@ -70,14 +71,14 @@ interface differs from the original proposal. `Documentation/Adapter-Survey.md` 
 - `Bitvantage.InternetProtocol.NetworkPrefixLookup/`: the core package.
   - `Keys/`: `IBitKey<TSelf>`, `Bits32` and `Bits128`.
   - `Core/`: `BitTrie` (the read-write trie), `FrozenBitTrie`, `IReadOnlyBitTrie`, `BitSet256` with the ART tables,
-    `WriteBatch`, `PrefixEntry`, `NoValue`.
+    `WriteBatch`, `PrefixEntry`, `NoValue`, and `Lock`, which stands in for `System.Threading.Lock` on .NET 8.
   - `IP/`: the adapter interface, `IPAddressBits`, `IPPrefixLookup` and its frozen form, the internal `IPLookupReader`
     they share, and `IPNetworkLookup` for `System.Net.IPNetwork`.
 - `Bitvantage.InternetProtocol.NetworkPrefixLookup.IPNetwork2/` and `.MaxMind/`: the adapter packages,
   each an adapter struct, a read-write and frozen class pair, and a short `README.md` for its package page. The MaxMind
   package also has `MaxMindDatabase.Load`.
 - `Packaging.props`: the package metadata, version, Source Link and package validation settings the three library
-  projects share. Each project sets only its title, description, tags and README.
+  projects share. Each project sets only its description, tags and README.
 - The read-only members of the read-write and frozen IP lookups are written once, in the internal struct
   `IPLookupReader`, and each public class forwards to it in one line. A marker type argument, `ReadWriteForm` or
   `FrozenForm`, lets the JIT call each form's sealed trie type directly; see "One copy of the read-only members" in
@@ -94,22 +95,26 @@ interface differs from the original proposal. `Documentation/Adapter-Survey.md` 
   folder, and it targets .NET 7, which the original shipped on, as well as .NET 10.
 - `AotSmokeTest/` exercises each package once. It is in the solution and treats warnings as errors, so its build runs
   the AOT analyzers over the libraries' use, and CI publishes it with native AOT and runs it.
-- `.github/workflows/ci.yml` builds with warnings as errors, tests on Linux x64 and ARM64 and on Windows, packs on
-  Linux, and publishes `AotSmokeTest` with native AOT for linux-x64 and linux-arm64. macOS is left out because no
-  macOS runner took the job on the first run.
+- `.github/workflows/ci.yml` runs on pushes to `main`, on `v*` tags and on pull requests to `main`. It builds with
+  warnings as errors, tests both target frameworks on Linux x64 and ARM64 and on Windows, packs on Linux, and publishes
+  `AotSmokeTest` with native AOT for linux-x64 and linux-arm64. A `v*` tag also publishes the packages to nuget.org
+  through Trusted Publishing, so no API key is stored. macOS is left out because no macOS runner took the job on the
+  first run.
 
 ## Build and test
 
-All projects target .NET 10. Cloud containers do not ship the SDK; install it into the home directory:
+The libraries and the tests target .NET 8 and .NET 10, the other projects .NET 10. Cloud containers do not ship the
+SDK; install it, and the .NET 8 runtime for the tests, into the home directory:
 
 ```sh
 curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 10.0 --install-dir "$HOME/.dotnet"
+curl -sSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 8.0 --runtime dotnet --install-dir "$HOME/.dotnet"
 export PATH="$HOME/.dotnet:$PATH" DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 ```
 
 ```sh
 dotnet build -c Release                                   # whole solution
-dotnet test Test -c Release                               # all unit tests, about 20 seconds
+dotnet test Test -c Release                               # all unit tests on both targets, about 30 seconds
 dotnet test Test -c Release --filter "FullyQualifiedName~Test.IP"   # a subset
 dotnet run -c Release --project PerformanceTest           # all benchmarks
 dotnet run -c Release --project PerformanceTest -- --filter '*RandomTable*'   # a subset
@@ -139,7 +144,7 @@ ROUTEVIEWS_DIR=/tmp/routeviews dotnet run -c Release --project PerformanceTest
 ROUTEVIEWS_DIR=/tmp/routeviews dotnet test Prototypes/GenericTrie.Tests -c Release   # about 3 minutes
 ```
 
-**Test baseline:** all 64 tests pass. The two tests that assert exact `ToTextTree` and `ToDotTree` output build their
+**Test baseline:** all 64 tests pass on each target framework. The two tests that assert exact `ToTextTree` and `ToDotTree` output build their
 expected text with `Environment.NewLine`, so they pass with either line ending. Keep `.gitattributes` at `text=auto`.
 
 The whole solution builds with no warnings. Do not add any.
@@ -147,8 +152,8 @@ The whole solution builds with no warnings. Do not add any.
 ## Conventions
 
 - Every `.cs` file starts with the MIT license header in `Bitvantage.InternetProtocol.NetworkPrefixLookup.sln.licenseheader`.
-  The headers carry no year. The copyright range in `LICENSE.md` and `Packaging.props` runs from 2024 to the year of the
-  latest release; extend both when releasing in a new year.
+  The headers, the header template, `LICENSE.md` and `Packaging.props` carry the same copyright range, from 2024 to the
+  year of the latest release; extend all of them when releasing in a new year.
 - C# source files are UTF-8 with a byte order mark and use 4-space indentation. Project files use tabs, except
   `Test/Test.csproj`, which uses spaces.
 - The library projects set `GenerateDocumentationFile`, so every public member needs an XML doc comment. A build
@@ -159,8 +164,10 @@ The whole solution builds with no warnings. Do not add any.
   what the library is, a quick start and performance. It never mentions or compares with version 2; notes on upgrading
   belong in `CHANGELOG.md`. It is also the core package's README on nuget.org, which renders no relative links or
   images, so its links use absolute `github.com` URLs on `main` and its images `raw.githubusercontent.com` ones.
-- Release packages are packed from `main`, from a commit pushed to GitHub, so that Source Link can fetch the source of
-  the commit each package records. CI packs every push; publish the packages of a run on `main`.
+- Releases are published by CI. Set `Version` in `Packaging.props`, merge to `main`, and push the tag `v<Version>` on
+  that commit; the `publish` job pushes the packages to nuget.org. The tag must be on a commit pushed to GitHub, so that
+  Source Link can fetch the source each package records, and the packages' release notes link to the tag's release
+  page. Once 3.0.0 is on nuget.org, uncomment `PackageValidationBaselineVersion` in `Packaging.props`.
 - Comment tags in the code:
   - `PERF:` marks a known cost on a hot path.
   - `KNOWN ISSUE:` marks a confirmed bug that was intentionally left unchanged.
@@ -186,7 +193,8 @@ The whole solution builds with no warnings. Do not add any.
   a time.
 - Backward compatibility with the v2 API is not required, but keep public API changes deliberate and documented in
   `Documentation/Interface.md`.
-- Target .NET 10 only. Do not add other target frameworks or change package versions unless asked.
+- Target .NET 8 and .NET 10. Do not add other target frameworks or change package versions unless asked. Code that
+  uses an API newer than .NET 8 needs a .NET 8 path, as the writer lock and `BitTrie.Settled` have.
 
 ## Performance work
 

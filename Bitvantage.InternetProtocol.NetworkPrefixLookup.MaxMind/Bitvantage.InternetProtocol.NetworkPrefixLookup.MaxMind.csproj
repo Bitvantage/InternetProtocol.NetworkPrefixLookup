@@ -3,13 +3,13 @@
 	<Import Project="../Packaging.props" />
 
 	<PropertyGroup>
-		<TargetFramework>net10.0</TargetFramework>
+		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+		<LangVersion>14</LangVersion>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<RootNamespace>Bitvantage.InternetProtocol.NetworkPrefixLookup</RootNamespace>
-		<Title>Bitvantage.InternetProtocol.NetworkPrefixLookup.MaxMind</Title>
-		<PackageTags>maxmind;mmdb;geoip;geoip2;geolite2;asn;geolocation;ip-lookup;longest-prefix-match</PackageTags>
+		<PackageTags>maxmind;mmdb;geoip;geoip2;geolite2;asn;ip-lookup;longest-prefix-match</PackageTags>
 		<Description>Loads a whole MaxMind DB file, such as GeoIP2, GeoLite2 or ASN, into a lookup table for fast longest-prefix-match lookups by address.</Description>
 	</PropertyGroup>
 

@@ -1,6 +1,6 @@
 ﻿/*
    Bitvantage.InternetProtocol.NetworkPrefixLookup
-   Copyright (C) Michael Crino
+   Copyright (C) 2024-2026 Michael Crino
 
    Licensed under the MIT License. See LICENSE.md in the repository root.
 */

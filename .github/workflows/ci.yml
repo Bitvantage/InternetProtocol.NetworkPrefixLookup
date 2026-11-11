@@ -1,39 +1,71 @@
-# Builds, tests and packs on x64 and ARM64, and publishes the AOT smoke test with native AOT on both.
+# Builds, tests and packs every push to main, every v* tag and every pull request to main, and publishes the packages
+# to nuget.org when a v* tag is pushed. Publishing uses Trusted Publishing, so no API key is stored in the repository.
 name: CI
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
 jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      # the solution builds with no warnings, and must stay that way
+      - name: Build
+        run: dotnet build --no-restore --configuration Release -warnaserror
+
+      - name: Test
+        run: dotnet test --no-build --configuration Release
+
+      - name: Pack
+        run: dotnet pack --no-build --configuration Release --output artifacts
+
+      # the symbol packages go too: pushing a .nupkg also pushes the .snupkg beside it
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: |
+            artifacts/*.nupkg
+            artifacts/*.snupkg
+
+  # The lock-free lookups depend on memory ordering, which ARM64 enforces more weakly than x64, so the tests also run
+  # there, and on Windows
   test:
-    name: Build and test (${{ matrix.os }})
+    name: Test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        # ubuntu-24.04-arm runs on ARM64, the others on x64. macos-latest was left out: on the first run no macOS
-        # runner picked the job up, and GitHub cancelled it after 15 minutes in the queue
-        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest]
+        # macos-latest was left out: on the first run no macOS runner picked the job up, and GitHub cancelled it after
+        # 15 minutes in the queue
+        os: [ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
-      # the solution builds with no warnings, and must stay that way
-      - run: dotnet build -c Release -warnaserror
-      - run: dotnet test Test -c Release --no-build
-      - name: Pack
-        if: matrix.os == 'ubuntu-latest'
-        run: dotnet pack -c Release --no-build -o artifacts
-      - uses: actions/upload-artifact@v4
-        if: matrix.os == 'ubuntu-latest'
-        with:
-          name: packages
-          path: artifacts/
+          dotnet-version: |
+            8.0.x
+            10.0.x
+      - run: dotnet test Test --configuration Release
 
   aot:
     name: Native AOT (${{ matrix.rid }})
@@ -54,3 +86,30 @@ jobs:
       # the project treats warnings as errors, so a trimming or AOT warning in the libraries fails the publish
       - run: dotnet publish AotSmokeTest -c Release -r ${{ matrix.rid }} -o aot
       - run: ./aot/AotSmokeTest
+
+  publish:
+    needs: [build, test, aot]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nupkg
+          path: artifacts
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      # Trusted Publishing: exchanges the job's OIDC token for a nuget.org key that lasts an hour, so no API key is stored
+      # in the repository. It needs a Trusted Publishing policy on nuget.org for this repository and workflow file.
+      - uses: NuGet/login@v1
+        id: nuget-login
+        with:
+          user: Bitvantage
+
+      - name: Push to nuget.org
+        run: dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate

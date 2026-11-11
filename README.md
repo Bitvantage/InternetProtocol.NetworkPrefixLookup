@@ -19,13 +19,19 @@ packet classification and GeoIP data, and it scales to full Internet routing tab
 - **MaxMind databases** load into a lookup that answers 5 to 10 times as fast as MaxMind's own reader.
 - **Any network type.** `System.Net.IPNetwork` is built in, two packages add `IPNetwork2` and MaxMind networks, and an
   adapter of four static methods adds your own type.
-- **No dependencies** in the core package. It targets .NET 10, supports trimming and native AOT, and ships Source Link
-  and symbols.
+- **No dependencies** in the core package. It targets .NET 8 and .NET 10, supports trimming and native AOT, and ships
+  Source Link and symbols.
 
 ## Quick start
 
 ```sh
 dotnet add package Bitvantage.InternetProtocol.NetworkPrefixLookup
+```
+
+Or from the NuGet Package Manager console:
+
+```
+PM> NuGet\Install-Package Bitvantage.InternetProtocol.NetworkPrefixLookup
 ```
 
 ```csharp
@@ -61,7 +67,8 @@ var snapshot = routes.Freeze();
 
 Measured on 2026-11-09 on an AMD Ryzen 7 7800X3D at 4.2 GHz with .NET 10 and BenchmarkDotNet, with the CAIDA
 RouteViews tables of September 2025: 1,054,037 IPv4 and 239,598 IPv6 prefixes. Each of a million lookups is for a random
-address inside a randomly chosen prefix. The times are the mean per lookup.
+address inside a randomly chosen prefix. The times are the mean per lookup. On .NET 8 lookups take about a fifth
+longer.
 
 | Lookup | Read-write, IPv4 | Read-write, IPv6 | Frozen, IPv4 | Frozen, IPv6 |
 | --- | --- | --- | --- | --- |

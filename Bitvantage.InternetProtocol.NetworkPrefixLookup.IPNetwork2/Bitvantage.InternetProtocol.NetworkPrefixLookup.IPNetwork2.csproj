@@ -3,12 +3,12 @@
 	<Import Project="../Packaging.props" />
 
 	<PropertyGroup>
-		<TargetFramework>net10.0</TargetFramework>
+		<TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+		<LangVersion>14</LangVersion>
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<RootNamespace>Bitvantage.InternetProtocol.NetworkPrefixLookup</RootNamespace>
-		<Title>Bitvantage.InternetProtocol.NetworkPrefixLookup.IPNetwork2</Title>
 		<PackageTags>ipnetwork2;ip;ipv4;ipv6;cidr;subnet;longest-prefix-match;lpm;ip-lookup</PackageTags>
 		<Description>Longest-prefix-match lookups over IPNetwork2 networks from the IPNetwork2 package.</Description>
 	</PropertyGroup>
