@@ -4,8 +4,9 @@ Longest-prefix-match lookups for IPv4 and IPv6 in .NET. Given an address, a look
 network that contains it and the value stored with that network. The library is built for routing tables, access lists,
 packet classification and GeoIP data, and it scales to full Internet routing tables.
 
-- **Fast lookups.** On a full routing table of a million IPv4 prefixes, a lookup takes about 100 ns on one 2.8 GHz cloud
-  core, and a frozen table returns the value for an integer address in 43 ns. Lookups allocate nothing.
+- **Fast lookups.** On a full routing table of a million IPv4 prefixes, a lookup takes about 26 ns on an AMD Ryzen 7
+  7800X3D and about 100 ns on one 2.8 GHz cloud core, and a frozen table returns the value for an integer address in
+  6.3 ns on the Ryzen and 43 ns on the cloud core. Lookups allocate nothing.
 - **Faster than Go's BART.** Lookups of addresses spread across a full routing table are 1.1 to 2.6 times as fast as in
   BART, the Go library whose design the read-write table follows, and writes that concurrent readers can share are 2.3
   to 3.2 times as fast.
@@ -58,32 +59,39 @@ var snapshot = routes.Freeze();
 
 ## Performance
 
-Measured on 2026-10-23 on a 4-core cloud container with an Intel Xeon at 2.8 GHz and .NET 10, with the CAIDA RouteViews
-tables of September 2025: 1,054,037 IPv4 and 239,598 IPv6 prefixes. Each of a million lookups is for a random address
-inside a randomly chosen prefix, so most memory reads miss the CPU cache, as they do in a busy server. The times are the
-median per lookup.
+Measured on 2026-11-09 on an AMD Ryzen 7 7800X3D at 4.2 GHz with .NET 10 and BenchmarkDotNet, with the CAIDA
+RouteViews tables of September 2025: 1,054,037 IPv4 and 239,598 IPv6 prefixes. Each of a million lookups is for a random
+address inside a randomly chosen prefix. The times are the mean per lookup.
 
 | Lookup | Read-write, IPv4 | Read-write, IPv6 | Frozen, IPv4 | Frozen, IPv6 |
 | --- | --- | --- | --- | --- |
-| `TryGetMatch` from an `IPAddress`, returning the network and the value | 107 ns | 204 ns | 83 ns | 208 ns |
-| `TryGetMatchValue` from a `uint` or `UInt128` | 86 ns | 168 ns | 43 ns | 103 ns |
-| `ContainsMatch` from an `IPAddress` | 39 ns | 91 ns | | |
+| `TryGetMatch` from an `IPAddress`, returning the network and the value | 26 ns | 59 ns | 11 ns | 26 ns |
+| `TryGetMatch` from a `uint` or `UInt128`, returning the network and the value | 23 ns | 54 ns | 8.0 ns | 24 ns |
+| `TryGetMatchValue` from a `uint` or `UInt128` | | | 6.3 ns | 22 ns |
 
-With the compressed layout, the frozen IPv6 table returns a value in 68 ns. When the addresses and the parts of the
-table they reach stay in cache, a read-write lookup from an integer takes 10 ns for IPv4 and 29 ns for IPv6, and a frozen
-one 4 ns and 14 ns. No lookup allocates.
+This processor's 96 MB L3 cache can hold any one of these tables, so memory reads that miss the smaller caches can be
+served from it rather than from main memory. Where the table does not fit in the cache, lookups take longer: on a 4-core
+cloud Xeon at 2.8 GHz on 2026-10-23, `TryGetMatch` from an `IPAddress` took 107 ns for IPv4 and 204 ns for IPv6 on the
+read-write tables, and `TryGetMatchValue` from an integer 43 ns and 103 ns on the frozen ones.
+
+With the compressed layout, the frozen tables take 11 ns for IPv4 and 30 ns for IPv6 from an integer. On a table of
+1,000 prefixes, small enough to stay in the faster caches, a lookup from an `IPAddress` takes 9 ns for IPv4 and 20 ns for
+IPv6, and a frozen one 4 ns and 16 ns. No lookup allocates.
 
 **Memory.** The read-write table holds 32 MB for the IPv4 table and 14 MB for the IPv6 table. Each stored `IPNetwork`
 adds an `IPAddress` object of 40 bytes for an IPv4 prefix and 80 bytes for an IPv6 prefix. A frozen copy holds 68 MB for
-IPv4 and 65 MB for IPv6 with the leaf-pushed layout, which `Freeze` chooses for these tables, or 46 MB and 17 MB with the
+IPv4 and 65 MB for IPv6 with the leaf-pushed layout, which `Freeze` chooses for these tables, or 47 MB and 17 MB with the
 compressed layout.
 
-**Writes.** Building a table from a sequence of prefixes takes 0.14 s for the IPv4 table and 0.05 s for the IPv6 table.
-A single write takes 0.5 to 0.6 µs when the prefixes arrive in address order and 3 to 4.5 µs for random changes to a full
-table. Each write allocates 1.1 to 1.8 KB, because it copies the node it changes instead of changing it under readers.
+**Writes.** Building a table from a sequence of prefixes takes 0.05 s for the IPv4 table and 0.02 s for the IPv6 table,
+or 0.09 s and 0.03 s when the prefixes arrive shuffled. A single write takes 0.18 to 0.26 µs when the prefixes arrive in
+address order, and 0.22 µs when every thousandth prefix of the IPv4 table is removed and added back. Each write allocates
+1.1 to 1.8 KB, because it copies the node it changes instead of changing it under readers.
 
-**Compared with Go's BART.** Both libraries ran on the same machine with the same tables and addresses, and returned the
-same answers. BART takes `netip.Addr` values; this library took `IPAddress` objects. Each cell gives IPv4, then IPv6.
+**Compared with Go's BART.** Both libraries ran on the 4-core cloud Xeon on 2026-10-23, with the same tables and
+addresses, and returned the same answers. Removing and adding back 100,000 random prefixes of the full tables took 3 to
+4.5 µs per write there. BART takes `netip.Addr` values; this library took `IPAddress` objects. Each cell gives IPv4,
+then IPv6.
 
 | | BART `Table` | This library, read-write | This library, frozen |
 | --- | --- | --- | --- |
@@ -93,10 +101,17 @@ same answers. BART takes `netip.Addr` values; this library took `IPAddress` obje
 | Memory | 24 / 10 MB | 32 / 14 MB, plus the `IPNetwork` objects | |
 | A write that concurrent readers can share | 10.4 / 9.3 µs | 4.5 / 2.9 µs | |
 
+The IPv6 times of this library predate the change that let the conversion of IPv6 addresses inline, which on the Ryzen
+made IPv6 lookups from `IPAddress` objects 10 to 40 ns faster.
+
 BART uses less memory, and its in-place writes take 0.4 to 0.5 µs when nothing reads the table at the same time. Its
 `Fast` table beats this library's read-write table on IPv6 when everything stays in cache.
-[Bart-Comparison.md](Documentation/Bart-Comparison.md#against-gos-bart) has the method and every measurement, and
-[Architecture.md](Documentation/Architecture.md#performance) has BenchmarkDotNet measurements of the other operations.
+[Bart-Comparison.md](https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/blob/main/Documentation/Bart-Comparison.md#against-gos-bart)
+has the method and every measurement,
+[Architecture.md](https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/blob/main/Documentation/Architecture.md#performance)
+has BenchmarkDotNet measurements of the other operations, and
+[Documentation/Benchmarks](https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/blob/main/Documentation/Benchmarks/2026-11-09-after-fixes/README.md)
+has the full reports of the run above.
 
 ## Choosing a table
 
@@ -110,8 +125,8 @@ BART uses less memory, and its in-place writes take 0.4 to 0.5 µs when nothing 
 | Networks of your own type | `IPPrefixLookup<TPrefix, TAdapter, TValue>` with an adapter |
 | Keys that are not IP addresses | `BitTrie<TKey, TPrefix, TValue>` |
 
-A frozen table returns values in 0.4 to 0.6 of the read-write time. Every lookup type has the same read-only interface,
-`IReadOnlyIPPrefixLookup<TPrefix, TValue>`, so code that only reads works with either form.
+On a full routing table a frozen table returns values in 0.3 to 0.5 of the read-write time. Every lookup type has the
+same read-only interface, `IReadOnlyIPPrefixLookup<TPrefix, TValue>`, so code that only reads works with either form.
 
 ## Looking up
 
@@ -213,15 +228,15 @@ if (countries.TryGetMatchValue(IPAddress.Parse("81.2.69.160"), out var record))
     Console.WriteLine(((Dictionary<string, object>)record["country"])["iso_code"]); // GB
 ```
 
-On a database the size of a full routing table, 1,240,422 IPv4 and 413,309 IPv6 networks written from the RouteViews
-tables:
+On the Ryzen above, with a database the size of a full routing table, 1,240,422 IPv4 and 413,309 IPv6 networks written
+from the RouteViews tables:
 
 | | MaxMind `Reader.Find` | Read-write lookup | Frozen lookup |
 | --- | --- | --- | --- |
-| Time per lookup | 835 ns | 149 ns | 86 ns |
+| Time per lookup | 254 ns | 38 ns | 27 ns |
 | Allocated per lookup | 344 bytes | Nothing | Nothing |
 
-The lookup costs time to load and memory to hold. That database took 2.4 to 4.2 seconds to load and the read-write lookup
+The lookup costs time to load and memory to hold. That database took 0.9 seconds to load and the read-write lookup
 held 225 MB, where the reader opens at once and maps the 19 MB file. The lookup pays off when an application looks up
 many addresses, such as a server that checks every request or a job that processes logs. For a few lookups, or where
 memory is tight, MaxMind's reader is the better choice.
@@ -319,6 +334,13 @@ empty lookup holds only a few KB.
 `ToTextTree` prints the trie of one address family, and `ToDotTree` writes it in the DOT language for Graphviz.
 `GetStatistics` reports the number of nodes and the bytes they hold.
 
+The drawing below holds the first 100 prefixes announced in `215.0.0.0/8`. Each box is a node, headed by the bits that
+lead to it, and lists the prefixes it stores in address order. A fringe is a prefix that ends on the node's last bit.
+[A wider drawing](https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/blob/main/Documentation/Media/NetworkPrefixLookup-Tree-Wide.svg)
+holds the first 1,000 prefixes in `2a02::/16`, and its ellipses are leaves.
+
+![The trie of the first 100 prefixes in 215.0.0.0/8](https://raw.githubusercontent.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/main/Documentation/Media/NetworkPrefixLookup-Tree-Small.svg)
+
 ## How it works
 
 The read-write table follows BART, the Balanced Routing Table by Karl Gaissmaier, a multibit trie for Go.
@@ -353,8 +375,10 @@ This library adds three things to that design:
   octet that still needs deciding, and reads nothing else. The compressed layout stores the same answers in nodes of 6
   bits with popcount-compressed bitmaps, as Poptrie does, and needs far less memory for scattered prefixes.
 
-[Architecture.md](Documentation/Architecture.md) describes the design in detail, and the other documents in
-[Documentation](Documentation) record how it was chosen and measured.
+[Architecture.md](https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/blob/main/Documentation/Architecture.md)
+describes the design in detail, and the other documents in
+[Documentation](https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/tree/main/Documentation) record how
+it was chosen and measured.
 
 ## Credits
 
@@ -372,5 +396,5 @@ This library adds three things to that design:
 
 ## License
 
-[GNU Affero General Public License v3.0](LICENSE.md). Changes between releases are listed in
-[CHANGELOG.md](CHANGELOG.md).
+[MIT License](https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/blob/main/LICENSE.md). Changes between
+releases are listed in [CHANGELOG.md](https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup/blob/main/CHANGELOG.md).

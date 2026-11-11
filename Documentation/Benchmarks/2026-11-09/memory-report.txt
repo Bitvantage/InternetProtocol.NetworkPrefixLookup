@@ -1,0 +1,15 @@
+random table, 96,943 prefixes: read-write 9.4 MB, frozen leaf-pushed 106.1 MB, frozen compressed 9.1 MB
+bytes allocated per TryGetMatch(IPAddress), read-write: 0.0
+bytes allocated per TryGetMatch(IPAddress), frozen: 0.0
+loaded 1,054,037 rv2 prefixes from routeviews-rv2-20250930-2200.pfx2as in 0.4 s
+loaded 239,603 rv6 prefixes from routeviews-rv6-20250930-0200.pfx2as in 0.4 s
+IPv4 read-write, built as one batch              30.4 MB     0.19 s
+IPv4 frozen, leaf-pushed 16/8                    65.0 MB     0.20 s
+IPv4 frozen, compressed 18                       44.2 MB     0.07 s
+IPv6 read-write, built as one batch              13.6 MB     0.10 s
+IPv6 frozen, leaf-pushed 16/8                    62.1 MB     0.15 s
+IPv6 frozen, compressed 18                       15.7 MB     0.12 s
+IPv4 statistics: BitTrieStatistics { Prefixes = 1054037, Nodes = 25083, Bytes = 31730564 }
+IPv6 statistics: BitTrieStatistics { Prefixes = 239598, Nodes = 33330, Bytes = 14169240 }
+IPv4 frozen bytes: leaf-pushed 65.0 MB, compressed 44.2 MB
+IPv6 frozen bytes: leaf-pushed 62.1 MB, compressed 15.7 MB

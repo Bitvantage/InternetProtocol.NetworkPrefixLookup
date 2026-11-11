@@ -46,6 +46,8 @@ Decisions made by the user:
   default, and the MaxMind loader loads MaxMind's alias networks only on request.
 - Public API compatibility is not a concern while version 3 is unreleased.
 - The package names as they are, and version 3.0.0 for every package.
+- The MIT License for every package from version 3.0.0, chosen over the AGPL-3.0 of earlier versions so that companies
+  and other libraries can adopt it.
 - No code generators or scripts in other languages: the repository stays C#.
 - Ranges with arbitrary ends, such as `192.168.0.10-192.168.0.20`, are left to a separate library: there is no range
   lookup and no `IPAddressRange` package.
@@ -72,7 +74,10 @@ interface differs from the original proposal. `Documentation/Adapter-Survey.md` 
   - `IP/`: the adapter interface, `IPAddressBits`, `IPPrefixLookup` and its frozen form, the internal `IPLookupReader`
     they share, and `IPNetworkLookup` for `System.Net.IPNetwork`.
 - `Bitvantage.InternetProtocol.NetworkPrefixLookup.IPNetwork2/` and `.MaxMind/`: the adapter packages,
-  each an adapter struct and a read-write and frozen class pair. The MaxMind package also has `MaxMindDatabase.Load`.
+  each an adapter struct, a read-write and frozen class pair, and a short `README.md` for its package page. The MaxMind
+  package also has `MaxMindDatabase.Load`.
+- `Packaging.props`: the package metadata, version, Source Link and package validation settings the three library
+  projects share. Each project sets only its title, description, tags and README.
 - The read-only members of the read-write and frozen IP lookups are written once, in the internal struct
   `IPLookupReader`, and each public class forwards to it in one line. A marker type argument, `ReadWriteForm` or
   `FrozenForm`, lets the JIT call each form's sealed trie type directly; see "One copy of the read-only members" in
@@ -134,14 +139,16 @@ ROUTEVIEWS_DIR=/tmp/routeviews dotnet run -c Release --project PerformanceTest
 ROUTEVIEWS_DIR=/tmp/routeviews dotnet test Prototypes/GenericTrie.Tests -c Release   # about 3 minutes
 ```
 
-**Test baseline:** all 63 tests pass. The one test that asserts exact `ToTextTree` output builds its expected
-text with `Environment.NewLine`, so it passes with either line ending. Keep `.gitattributes` at `text=auto`.
+**Test baseline:** all 64 tests pass. The two tests that assert exact `ToTextTree` and `ToDotTree` output build their
+expected text with `Environment.NewLine`, so they pass with either line ending. Keep `.gitattributes` at `text=auto`.
 
 The whole solution builds with no warnings. Do not add any.
 
 ## Conventions
 
-- Every `.cs` file starts with the AGPL license header in `Bitvantage.InternetProtocol.NetworkPrefixLookup.sln.licenseheader`.
+- Every `.cs` file starts with the MIT license header in `Bitvantage.InternetProtocol.NetworkPrefixLookup.sln.licenseheader`.
+  The headers carry no year. The copyright range in `LICENSE.md` and `Packaging.props` runs from 2024 to the year of the
+  latest release; extend both when releasing in a new year.
 - C# source files are UTF-8 with a byte order mark and use 4-space indentation. Project files use tabs, except
   `Test/Test.csproj`, which uses spaces.
 - The library projects set `GenerateDocumentationFile`, so every public member needs an XML doc comment. A build
@@ -150,7 +157,10 @@ The whole solution builds with no warnings. Do not add any.
   analyzers would report. They also publish Source Link and a symbol package.
 - `README.md` is technical and to the point, in plain sentences without parentheticals or other asides. It leads with
   what the library is, a quick start and performance. It never mentions or compares with version 2; notes on upgrading
-  belong in `CHANGELOG.md`.
+  belong in `CHANGELOG.md`. It is also the core package's README on nuget.org, which renders no relative links or
+  images, so its links use absolute `github.com` URLs on `main` and its images `raw.githubusercontent.com` ones.
+- Release packages are packed from `main`, from a commit pushed to GitHub, so that Source Link can fetch the source of
+  the commit each package records. CI packs every push; publish the packages of a run on `main`.
 - Comment tags in the code:
   - `PERF:` marks a known cost on a hot path.
   - `KNOWN ISSUE:` marks a confirmed bug that was intentionally left unchanged.

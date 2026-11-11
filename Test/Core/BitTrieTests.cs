@@ -1,19 +1,8 @@
 ﻿/*
    Bitvantage.InternetProtocol.NetworkPrefixLookup
-   Copyright (C) 2024 Michael Crino
+   Copyright (C) Michael Crino
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published by
-   the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
-
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
-
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+   Licensed under the MIT License. See LICENSE.md in the repository root.
 */
 
 using System.Reflection;
@@ -292,7 +281,38 @@ public class BitTrieTests
             "leaf c0a80000/16",
             "");
         Assert.That(trie.ToTextTree(Format), Is.EqualTo(expected));
-        Assert.That(trie.ToDotTree(Format), Does.StartWith("digraph trie {"));
+    }
+
+    [Test]
+    public void The_dot_tree_heads_each_node_and_tags_its_rows()
+    {
+        var trie = new BitTrie<Bits32, string, int>();
+        foreach (var (bits, length) in new[] { (0x0A000000u, 8), (0x0A010000u, 16), (0x0A010100u, 24), (0x0A010200u, 24), (0x0A000000u, 7), (0xC0A80000u, 16), (0u, 0) })
+            trie.Add(new Bits32(bits), length, "", 0);
+
+        // a node's heading is the bits that lead to it, not a stored prefix, so it has no tag
+        static string Node(int nodeId, string heading, params string[] rows) =>
+            $"  n{nodeId} [label=<<table border=\"1\" cellborder=\"0\" cellspacing=\"0\"><tr><td colspan=\"2\" align=\"left\"><b>{heading}</b></td></tr>"
+            + (rows.Length > 0 ? "<hr/>" + string.Concat(rows) : "") + "</table>>];";
+        static string Row(string kind, string prefix) =>
+            $"<tr><td align=\"left\"><font color=\"gray40\">{kind}&#160;</font></td><td align=\"left\">{prefix}</td></tr>";
+
+        var expected = string.Join(Environment.NewLine,
+            "digraph trie {",
+            "  node [shape=plain, fontname=\"Courier\"];",
+            Node(0, "root", Row("prefix", "00000000/0"), Row("prefix", "0a000000/7"), Row("fringe", "0a000000/8")),
+            Node(1, "0a000000/8", Row("fringe", "0a010000/16")),
+            Node(2, "0a010000/16", Row("fringe", "0a010100/24"), Row("fringe", "0a010200/24")),
+            "  n1 -> n2;",
+            "  n0 -> n1;",
+            "  n3 [shape=ellipse, label=<c0a80000/16>];",
+            "  n0 -> n3;",
+            "}",
+            "");
+        Assert.That(trie.ToDotTree(Format), Is.EqualTo(expected));
+
+        // formatted prefixes are escaped for Graphviz's HTML-like labels
+        Assert.That(trie.ToDotTree((_, length) => $"<{length}&>"), Does.Contain("<b>&lt;8&amp;&gt;</b>").And.Contain("label=<&lt;16&amp;&gt;>"));
     }
 
     [Test]

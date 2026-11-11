@@ -1,0 +1,35 @@
+```
+
+BenchmarkDotNet v0.15.8, Windows 11 (10.0.26200.9711/25H2/2025Update/HudsonValley2)
+AMD Ryzen 7 7800X3D 4.20GHz, 1 CPU, 16 logical and 8 physical cores
+.NET SDK 10.0.403
+  [Host]     : .NET 10.0.14 (10.0.14, 10.0.1426.52326), X64 RyuJIT x86-64-v4
+  DefaultJob : .NET 10.0.14 (10.0.14, 10.0.1426.52326), X64 RyuJIT x86-64-v4
+
+
+```
+| Method        | Family | Frozen | Mean       | Error     | StdDev    | Ratio | RatioSD | Gen0     | Allocated  | Alloc Ratio |
+|-------------- |------- |------- |-----------:|----------:|----------:|------:|--------:|---------:|-----------:|------------:|
+| **TryGetMatch**   | **4**      | **False**  |   **3.246 ms** | **0.0527 ms** | **0.0493 ms** |  **1.00** |    **0.02** |        **-** |          **-** |          **NA** |
+| Overlaps      | 4      | False  |   2.761 ms | 0.0315 ms | 0.0295 ms |  0.85 |    0.02 |        - |          - |          NA |
+| GetMatches    | 4      | False  |   7.935 ms | 0.0754 ms | 0.0668 ms |  2.45 |    0.04 | 304.6875 | 15325472 B |          NA |
+| GetSubnetsAny | 4      | False  |   9.541 ms | 0.1198 ms | 0.1121 ms |  2.94 |    0.05 | 359.3750 | 18658640 B |          NA |
+| GetSubnetsAll | 4      | False  | 135.706 ms | 2.0867 ms | 1.9519 ms | 41.82 |    0.84 | 250.0000 | 19059320 B |          NA |
+|               |        |        |            |           |           |       |         |          |            |             |
+| **TryGetMatch**   | **4**      | **True**   |   **2.539 ms** | **0.0382 ms** | **0.0319 ms** |  **1.00** |    **0.02** |        **-** |          **-** |          **NA** |
+| Overlaps      | 4      | True   |   1.225 ms | 0.0240 ms | 0.0408 ms |  0.48 |    0.02 |        - |          - |          NA |
+| GetMatches    | 4      | True   |   5.234 ms | 0.0987 ms | 0.0969 ms |  2.06 |    0.04 | 234.3750 | 11814872 B |          NA |
+| GetSubnetsAny | 4      | True   |  13.265 ms | 0.1174 ms | 0.0980 ms |  5.22 |    0.07 | 171.8750 |  8800000 B |          NA |
+| GetSubnetsAll | 4      | True   |  35.610 ms | 0.3830 ms | 0.3198 ms | 14.03 |    0.21 | 133.3333 |  8800000 B |          NA |
+|               |        |        |            |           |           |       |         |          |            |             |
+| **TryGetMatch**   | **6**      | **False**  |   **8.853 ms** | **0.0772 ms** | **0.0603 ms** |  **1.00** |    **0.01** |        **-** |          **-** |          **NA** |
+| Overlaps      | 6      | False  |   5.728 ms | 0.0449 ms | 0.0420 ms |  0.65 |    0.01 |        - |          - |          NA |
+| GetMatches    | 6      | False  |  10.604 ms | 0.1026 ms | 0.0910 ms |  1.20 |    0.01 | 296.8750 | 15363176 B |          NA |
+| GetSubnetsAny | 6      | False  |  12.350 ms | 0.0729 ms | 0.0609 ms |  1.40 |    0.01 | 421.8750 | 21910240 B |          NA |
+| GetSubnetsAll | 6      | False  |  55.983 ms | 0.6633 ms | 0.5880 ms |  6.32 |    0.08 | 444.4444 | 22692504 B |          NA |
+|               |        |        |            |           |           |       |         |          |            |             |
+| **TryGetMatch**   | **6**      | **True**   |   **4.714 ms** | **0.0678 ms** | **0.0635 ms** |  **1.00** |    **0.02** |        **-** |          **-** |          **NA** |
+| Overlaps      | 6      | True   |   3.733 ms | 0.0486 ms | 0.0430 ms |  0.79 |    0.01 |        - |          - |          NA |
+| GetMatches    | 6      | True   |   8.073 ms | 0.0500 ms | 0.0444 ms |  1.71 |    0.02 | 250.0000 | 12683240 B |          NA |
+| GetSubnetsAny | 6      | True   |  13.853 ms | 0.1058 ms | 0.0938 ms |  2.94 |    0.04 | 250.0000 | 12800000 B |          NA |
+| GetSubnetsAll | 6      | True   |  21.569 ms | 0.1471 ms | 0.1304 ms |  4.58 |    0.07 | 250.0000 | 12800000 B |          NA |

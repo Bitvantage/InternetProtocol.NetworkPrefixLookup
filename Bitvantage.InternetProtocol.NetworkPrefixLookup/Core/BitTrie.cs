@@ -1,19 +1,8 @@
 ﻿/*
    Bitvantage.InternetProtocol.NetworkPrefixLookup
-   Copyright (C) 2024 Michael Crino
+   Copyright (C) Michael Crino
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published by
-   the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
-
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
-
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+   Licensed under the MIT License. See LICENSE.md in the repository root.
 */
 
 using System.Collections;
@@ -2109,14 +2098,21 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         }
     }
 
-    /// <summary>The structure of the trie in Graphviz DOT format, for rendering with <c>dot</c>.</summary>
+    /// <summary>
+    ///     The structure of the trie in Graphviz DOT format, for rendering with <c>dot</c>. Each node is a box headed
+    ///     by the bits that lead to it, which are not a stored prefix, above its prefixes and fringes in address order.
+    ///     Each leaf is an ellipse.
+    /// </summary>
     /// <param name="format">Formats a prefix given its bits and length.</param>
     public string ToDotTree(Func<TKey, int, string> format)
     {
         ArgumentNullException.ThrowIfNull(format);
         var text = new StringBuilder();
         text.AppendLine("digraph trie {");
-        text.AppendLine("  node [shape=box, fontname=\"monospace\"];");
+        // Courier rather than monospace: Graphviz builds without font lookup, such as the WebAssembly ones behind
+        // online viewers, size text in a font they do not know with the widths of Times, and the text overflowed its
+        // boxes.
+        text.AppendLine("  node [shape=plain, fontname=\"Courier\"];");
         var nextId = 0;
         WriteDot(Root, 0, default, format, text, ref nextId, "root");
         text.AppendLine("}");
@@ -2127,20 +2123,23 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
     {
         var nodeId = nextId++;
         var offset = depth << 3;
-        var label = new StringBuilder(Escape(title));
-        for (var index = 1; index < 256; index++)
+
+        // the prefixes and the fringe that start at each octet, shortest first
+        var rows = new StringBuilder();
+        for (var octet = 0; octet < 256; octet++)
         {
-            if (!node.Prefixes.Test(index))
-                continue;
-            var relative = ArtTables.IndexToLength(index);
-            var bits = relative == 0 ? start : TKey.SetBits(start, offset, relative, index - (1 << relative));
-            label.Append("\\l").Append(Escape(format(bits, offset + relative)));
+            for (var relative = 0; relative < 8; relative++)
+                if ((octet & (0xFF >> relative)) == 0 && node.Prefixes.Test(ArtTables.PrefixToIndex(octet, relative)))
+                    AppendDotRow(rows, "prefix", format(relative == 0 ? start : TKey.SetBits(start, offset, relative, octet >> (8 - relative)), offset + relative));
+            if (node.Fringes.Test(octet))
+                AppendDotRow(rows, "fringe", format(TKey.SetBits(start, offset, 8, octet), offset + 8));
         }
 
-        for (var octet = 0; octet < 256; octet++)
-            if (node.Fringes.Test(octet))
-                label.Append("\\l").Append(Escape(format(TKey.SetBits(start, offset, 8, octet), offset + 8)));
-        text.Append("  n").Append(nodeId).Append(" [label=\"").Append(label).AppendLine("\\l\"];");
+        text.Append("  n").Append(nodeId).Append(" [label=<<table border=\"1\" cellborder=\"0\" cellspacing=\"0\">");
+        text.Append("<tr><td colspan=\"2\" align=\"left\"><b>").Append(EscapeHtml(title)).Append("</b></td></tr>");
+        if (rows.Length > 0)
+            text.Append("<hr/>").Append(rows);
+        text.AppendLine("</table>>];");
 
         for (var octet = 0; octet < 256; octet++)
         {
@@ -2148,7 +2147,7 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
             {
                 var leaf = node.LeafEntries[node.Leaves.Rank(octet) - 1];
                 var leafId = nextId++;
-                text.Append("  n").Append(leafId).Append(" [shape=ellipse, label=\"").Append(Escape(format(leaf.Bits, leaf.Length))).AppendLine("\"];");
+                text.Append("  n").Append(leafId).Append(" [shape=ellipse, label=<").Append(EscapeHtml(format(leaf.Bits, leaf.Length))).AppendLine(">];");
                 text.Append("  n").Append(nodeId).Append(" -> n").Append(leafId).AppendLine(";");
             }
 
@@ -2163,7 +2162,10 @@ public sealed class BitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey, TPre
         return nodeId;
     }
 
-    private static string Escape(string text) => text.Replace("\\", "\\\\").Replace("\"", "\\\"");
+    private static void AppendDotRow(StringBuilder rows, string kind, string prefix) =>
+        rows.Append("<tr><td align=\"left\"><font color=\"gray40\">").Append(kind).Append("&#160;</font></td><td align=\"left\">").Append(EscapeHtml(prefix)).Append("</td></tr>");
+
+    private static string EscapeHtml(string text) => text.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 }
 
 /// <summary>The size of a <see cref="BitTrie{TKey,TPrefix,TValue}" />.</summary>

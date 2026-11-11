@@ -44,9 +44,12 @@ contains a given prefix, and look prefixes up exactly.
 | `Bitvantage.InternetProtocol.NetworkPrefixLookup/Keys/` | `IBitKey<TSelf>`, `Bits32` and `Bits128` |
 | `Bitvantage.InternetProtocol.NetworkPrefixLookup/Core/` | `BitTrie`, `FrozenBitTrie`, `IReadOnlyBitTrie`, `BitSet256` and the ART tables, `PrefixEntry`, `NoValue` |
 | `Bitvantage.InternetProtocol.NetworkPrefixLookup/IP/` | The adapter interface, `IPAddressBits`, `IPPrefixLookup` and its frozen form, the internal `IPLookupReader` they share, `IPNetworkLookup` |
-| `Bitvantage.InternetProtocol.NetworkPrefixLookup.*/` | One adapter package each |
+| `Bitvantage.InternetProtocol.NetworkPrefixLookup.*/` | One adapter package each, with the README of its package page |
+| `Packaging.props` | Package metadata, version, Source Link and package validation shared by the three library projects |
 | `Test/` | NUnit tests: `Core/`, `IP/`, `Adapters/`, and MaxMind test databases in `Data/` |
 | `PerformanceTest/` | BenchmarkDotNet benchmarks and a memory report |
+| `Documentation/Benchmarks/` | The full reports of benchmark runs, one folder per run |
+| `Documentation/Media/` | Drawings of two tries by `ToDotTree`, used by the README; see [Diagnostics](#diagnostics) |
 | `Prototypes/GenericTrie/` | The prototypes the design was measured with; not part of the solution |
 
 The read-only members of `IPPrefixLookup` and `FrozenIPPrefixLookup` are written once, in the internal
@@ -268,6 +271,7 @@ under writes. It holds no nodes:
 | `_entries` | The prefix object and value of each prefix, in address order |
 | `_values` | A dense copy of the values, for `TryGetMatchValue`, unless `ValueOnlyLookups` is off |
 | `_keys` | Each prefix's bits, for `GetSubnets` and `Overlaps`: 4 bytes per IPv4 prefix and 16 per IPv6 prefix |
+| `_keyLevels` | Every 16th key of `_keys`, every 16th of those, and so on up to a level of at most 16 keys: the index for the search in `_keys` |
 | `_lengths` | Each prefix's length |
 | `_parents` | For each prefix, the nearest shorter stored prefix that contains it, or -1 |
 | `_root` and `_tables`, or `_root`, `_nodes` and `_answers` | The lookup tables of one of two layouts |
@@ -335,12 +339,17 @@ the parent chain from that address's longest match:
 
 The prefixes inside a prefix are one run of entries, because the entries are in address order with a shorter prefix
 first: those that contain the prefix and start at its address are shorter, so they come before the run. `GetSubnets`
-finds the run's start by a binary search over `_keys` and `_lengths` and reads on while the entries lie inside.
+finds the run's start with a search down `_keyLevels`: on each level it scans the at most 15 keys after the last
+sampled key below the prefix, which lie together, and it ends in `_keys` by skipping the shorter prefixes that start at
+the prefix's address. Then it reads on while the entries lie inside. On the full IPv4 table that is five levels and
+the keys, where a binary search over `_keys` made about 20 reads far apart; see
+[Changes after the first run](#changes-after-the-first-run).
 `Overlaps` first takes the longest match of the prefix's first address: a stored prefix that contains that address
-either contains the prefix or lies inside it. Failing that, a prefix inside it starts at a later address, and the binary
+either contains the prefix or lies inside it. Failing that, a prefix inside it starts at a later address, and the
 search's first entry is it. Without `_keys` neither query has a way in, because the lookup tables hold only answers, and
 a prefix shadowed by longer ones answers no address at all. Keeping them costs 4.0 MB on the real IPv4 table and 3.7 MB
-on the real IPv6 table: 6.6% more for leaf-pushed IPv4 and 30% more for compressed IPv6, the smallest form.
+on the real IPv6 table: 6.6% more for leaf-pushed IPv4 and 30% more for compressed IPv6, the smallest form. The levels
+add a fifteenth of that: 0.27 MB and 0.24 MB.
 
 Freezing holds the source trie's writer lock while it copies the prefixes out, so writes wait for that part; the
 tables are built from the copy after the lock is released. Readers of the source are not affected.
@@ -436,16 +445,204 @@ node 10.0.0.0/8, 3 prefixes
 leaf 192.168.0.0/16
 ```
 
-`ToDotTree` writes Graphviz DOT. `GetStatistics` counts prefixes and nodes and estimates bytes; `FrozenBitTrie.Bytes`
-sums its arrays.
+`ToDotTree` writes Graphviz DOT: a box for each node, headed by the bits that lead to it and listing its base-index
+prefixes and fringes in address order, and an ellipse for each leaf. It names the font Courier, because Graphviz builds
+without font lookup, such as the WebAssembly ones behind online viewers, size text in other fonts with the widths of
+Times, and the text overflowed its boxes. [NetworkPrefixLookup-Tree-Small.svg](Media/NetworkPrefixLookup-Tree-Small.svg)
+draws the first 100 prefixes in `215.0.0.0/8` and
+[NetworkPrefixLookup-Tree-Wide.svg](Media/NetworkPrefixLookup-Tree-Wide.svg) the first 1,000 in `2a02::/16`, from the
+RouteViews tables of 2025-09-30, rendered by Graphviz 12.1.2.
+
+`GetStatistics` counts prefixes and nodes and estimates bytes; `FrozenBitTrie.Bytes` sums its arrays.
 
 ## Performance
 
+### Latest full run
+
+Every benchmark in `PerformanceTest` and the `--memory` report, run on 2026-11-09 in one BenchmarkDotNet session of 43
+minutes, on commit `0a4e35b` with the three changes under [Changes after the first run](#changes-after-the-first-run):
+an AMD Ryzen 7 7800X3D desktop, 8 cores at 4.2 GHz with a 96 MB L3 cache, Windows 11, .NET 10.0.14 and BenchmarkDotNet
+0.15.8, with the CAIDA RouteViews tables of 2025-09-30.
+[Benchmarks/2026-11-09-after-fixes](Benchmarks/2026-11-09-after-fixes/README.md) holds the full reports, and
+[Benchmarks/2026-11-09](Benchmarks/2026-11-09/README.md) those of the first run, at `0a4e35b` itself. Between the two
+runs, benchmarks whose code did not change moved by up to 17%, most of them faster. Lookups allocate nothing in either
+form.
+
+The L3 cache can hold any one form of either real table, 13.6 to 65.3 MB, so memory reads that miss the smaller caches
+can be served from it rather than from main memory. Lookups gain more than builds over the
+[measured baseline](#measured-baseline): 6.8 to 12 times as fast on the real tables, against 3.3 to 4.8 times for
+building and freezing them. The baseline came from a slower cloud container and from older code, see
+[Since the baseline](#since-the-baseline), so compare ratios within a table rather than times across the two.
+
+**Real tables** (`RealTableBenchmarks`, one million lookups from precomputed keys, as in the baseline):
+
+| Lookup | Real IPv4, 1,054,037 prefixes | Ratio | Real IPv6, 239,603 prefixes | Ratio |
+| --- | --- | --- | --- | --- |
+| Read-write, by `uint` or `UInt128` | 22.7 ms | 1.00 | 54.2 ms | 1.00 |
+| Read-write, by `IPAddress` | 26.3 ms | 1.16 | 59.4 ms | 1.09 |
+| Frozen, leaf-pushed 16/8 | 8.0 ms | 0.35 | 23.7 ms | 0.44 |
+| Frozen, leaf-pushed, value only | 6.3 ms | 0.28 | 21.9 ms | 0.40 |
+| Frozen, compressed 18 | 11.1 ms | 0.49 | 29.6 ms | 0.55 |
+
+The frozen forms gain more over the read-write trie than in the baseline, where leaf-pushed took 0.56 and 0.59 of its
+time. A lookup by `IPAddress` costs 3.7 ns more than one by key on IPv4 and 5.1 ns more on IPv6; in the first run, before
+the IPv6 conversion inlined, it cost 37 ns more on IPv6.
+
+**The original library's benchmarks** (`ComparisonBenchmarks`, one million lookups from `IPAddress` objects, frozen
+tables leaf-pushed). `PerformanceTest.V2` did not run, so the baseline holds the only comparison with the original.
+
+| Table | Lookups | Frozen lookups | Built one prefix at a time | Built in one batch |
+| --- | --- | --- | --- | --- |
+| Small IPv4, 1,000 prefixes | 8.9 ms | 4.3 ms | 0.30 ms, 1.3 MB allocated | 0.15 ms, 0.5 MB |
+| Small IPv6, 1,000 prefixes | 20.0 ms | 15.5 ms | 0.17 ms, 1.1 MB | 0.09 ms, 0.3 MB |
+| Random IPv4, 96,944 prefixes | 25.6 ms | 13.9 ms | 80 ms, 261 MB | 14.1 ms, 20 MB |
+| Real IPv4, 1,054,037 prefixes | 26.0 ms | 11.1 ms | 187 ms, 1,160 MB | 107 ms, 101 MB |
+| Real IPv6, 239,603 prefixes | 53.8 ms | 25.8 ms | 61 ms, 257 MB | 23.5 ms, 32 MB |
+
+The frozen form is 1.3 to 2.3 times as fast as the read-write one. In the first run it gained nothing on the small IPv6
+table, 30.1 ms against 29.5 ms, because the IPv6 conversion did not inline; the IPv6 lookups here took 0.40 to 0.68 of
+their first-run time.
+
+**Random table** (`RandomTableBenchmarks`, version 2's benchmark data: 96,944 random IPv4 prefixes and a million random
+addresses):
+
+| Benchmark | Read-write | Frozen, leaf-pushed | Frozen, compressed |
+| --- | --- | --- | --- |
+| 1,000,000 lookups by `IPAddress` | 24.8 ms | 18.4 ms | 11.5 ms |
+| 1,000,000 lookups by `uint` | 22.1 ms | 8.3 ms | |
+| 100,000 adds, one at a time | 81 ms, 261 MB allocated | | |
+| 100,000 adds, one batch | 14.1 ms, 20 MB allocated | | |
+| Freezing | | 15.3 ms, 111 MB allocated | |
+| Memory held, from `--memory` | 9.4 MB | 106.2 MB | 9.1 MB |
+
+The compressed layout is the fastest form by `IPAddress`, 0.46 of the read-write time against 0.74 for leaf-pushed, as
+the layout rule expects for scattered prefixes.
+
+**Building the real tables** (`RealBuildBenchmarks`, the networks in address order unless shuffled):
+
+| Build | Real IPv4 | Real IPv6 |
+| --- | --- | --- |
+| One at a time | 186 ms, 1,160 MB allocated | |
+| One batch | 91.7 ms, 101 MB | 23.1 ms, 32 MB |
+| One batch, shuffled | 266 ms, 102 MB | 59.4 ms, 34 MB |
+| From a sequence | 53.0 ms, 66 MB | 17.0 ms, 26 MB |
+| From a sequence, shuffled | 87.7 ms, 66 MB | 27.2 ms, 26 MB |
+| Freezing, leaf-pushed | 45.7 ms, 68 MB | 23.8 ms, 65 MB |
+| Freezing, compressed | 56.2 ms, 70 MB | 29.5 ms, 28 MB |
+| Enumerating | 28.9 ms, 600 B | 9.3 ms, 1,032 B |
+
+Building from a sequence takes 0.58 of a batch's time on IPv4 and 0.73 on IPv6 in address order, and 0.33 and 0.46
+shuffled.
+
+**Memory held** (`--memory`) does not depend on the machine. The read-write trie holds 30.4 MB for real IPv4 and 13.6 MB
+for real IPv6, in 25,083 and 33,330 nodes, as under [Since the baseline](#since-the-baseline). The frozen tables now
+hold the key levels too: leaf-pushed 16/8, 65.3 MB and 62.3 MB; compressed 18, 44.5 MB and 16.0 MB.
+
+**Queries about networks** (`RealNetworkQueryBenchmarks`, 100,000 networks per family, made as described under
+[Since the baseline](#since-the-baseline); time and allocation per query, frozen tables leaf-pushed):
+
+| Query | Real IPv4, read-write | Real IPv4, frozen | Real IPv6, read-write | Real IPv6, frozen |
+| --- | --- | --- | --- | --- |
+| `TryGetMatch(network)`, for comparison | 32 ns | 24 ns | 66 ns | 43 ns |
+| `Overlaps` | 27 ns | 10 ns | 47 ns | 32 ns |
+| `GetMatches(network)`, as a list | 73 ns, 153 B | 51 ns, 118 B | 102 ns, 154 B | 74 ns, 127 B |
+| `GetSubnets(network).Any()` | 90 ns, 187 B | 90 ns, 88 B | 118 ns, 219 B | 94 ns, 128 B |
+| `GetSubnets(network)`, enumerated to the end | 1.31 µs, 191 B | 0.30 µs, 88 B | 0.53 µs, 227 B | 0.17 µs, 128 B |
+
+In the first run `GetSubnets(network).Any()` took 1.39 times as long frozen as read-write on IPv4, and 1.12 times on
+IPv6; with the key levels it takes 1.01 times and 0.79.
+
+**Writes** (`WriteBenchmarks`, the real IPv4 table): a batch that removes 10 prefixes and adds them back took 9.7 µs and
+allocated 101 KB, against 29 µs in the baseline. 2,110 single writes, every 1,000th prefix removed and added back, took
+0.46 ms and allocated 3.8 MB, against 2.03 ms: 0.22 µs and 1.8 KB per write.
+
+**The IP layer** (`LayerBenchmarks`, now on the trie inside the lookup): a million real IPv4 lookups took 23.5 ms on the
+bare `BitTrie` and 23.8 ms through `IPNetworkLookup`, a ratio of 1.01 with standard deviations of 0.6% and 1.2%.
+
+**MaxMind** (`MaxMindBenchmarks`, 100,000 lookups in the GeoIP2 Country test database; `RealMaxMindBenchmarks`, 200,000
+lookups, half IPv4 and half IPv6, in the database of 1,240,422 IPv4 and 413,309 IPv6 networks written from the RouteViews
+tables):
+
+| Variant | Test database | Ratio | Full-size database | Ratio |
+| --- | --- | --- | --- | --- |
+| `Reader.Find` | 209.1 ms, 469 MB allocated | 1.000 | 50.7 ms, 68.8 MB | 1.00 |
+| Loaded, read-write | 2.75 ms, nothing | 0.013 | 7.63 ms, nothing | 0.15 |
+| Loaded, frozen | 1.46 ms, nothing | 0.007 | 5.35 ms, nothing | 0.11 |
+| Loading the database | 0.24 ms, 0.9 MB | | 872 ms, 1,218 MB | |
+
+**Frozen roots** (`FrozenRootBenchmarks`, a million lookups by `uint` in tables of the first prefixes of the random
+data). Each layout's full root, 16 bits leaf-pushed and 18 bits compressed, against the root sized from the number of
+prefixes; each cell gives the time, then the table's size from the benchmark's log:
+
+| Prefixes | Leaf-pushed, full root | Leaf-pushed, sized root | Compressed, full root | Compressed, sized root |
+| --- | --- | --- | --- | --- |
+| 64 | 1.13 ms, 629 KB | 1.12 ms, 367 KB | 1.49 ms, 2,104 KB | 1.57 ms, 14 KB |
+| 256 | 5.33 ms, 908 KB | 5.35 ms, 647 KB | 6.05 ms, 2,121 KB | 5.01 ms, 48 KB |
+| 1,000 | 4.67 ms, 2,013 KB | 4.66 ms, 1,752 KB | 5.23 ms, 2,188 KB | 5.04 ms, 174 KB |
+| 4,000 | 2.61 ms, 6,403 KB | 2.62 ms, 6,141 KB | 2.20 ms, 2,455 KB | 2.67 ms, 655 KB |
+
+The sized leaf-pushed root takes the time of the full one within 1%. The sized compressed root takes 0.83 to 1.22 of the
+full root's time, in 0.7% to 27% of its memory.
+
+### Changes after the first run
+
+The first run on 2026-11-09, at commit `0a4e35b`, found three things to look into. Each was measured in one
+BenchmarkDotNet session on the same Ryzen.
+
+**Frozen `GetSubnets` and `Overlaps`.** `GetSubnets(network).Any()` took 1.39 times as long on the frozen real IPv4 table
+as on the read-write one, and 1.12 times on IPv6, because the frozen form found the start of the run with a binary
+search over all of `_keys`: about 20 reads far apart. It now searches down `_keyLevels`, see
+[The frozen trie](#the-frozen-trie). The three variants ran as jobs of one session, with the queries of
+`RealNetworkQueryBenchmarks`, 100,000 per family:
+
+| Frozen query | Binary search | Key levels, scanning, as shipped | Key levels, counting |
+| --- | --- | --- | --- |
+| `GetSubnets(network).Any()`, real IPv4 | 13.2 ms | 9.7 ms, 0.74 | 12.1 ms, 0.91 |
+| `GetSubnets(network).Any()`, real IPv6 | 13.4 ms | 9.6 ms, 0.71 | 12.2 ms, 0.91 |
+| `GetSubnets(network)`, enumerated to the end, real IPv4 | 34.9 ms | 31.4 ms, 0.90 | 33.9 ms, 0.97 |
+| `GetSubnets(network)`, enumerated to the end, real IPv6 | 20.6 ms | 16.8 ms, 0.81 | 19.7 ms, 0.95 |
+| `Overlaps`, real IPv4 | 1.21 ms | 1.06 ms, 0.87 | 1.19 ms, 0.99 |
+| `Overlaps`, real IPv6 | 3.46 ms | 3.19 ms, 0.92 | 3.43 ms, 0.99 |
+
+Scanning stops at the first key at or above the prefix's; counting compares every key in the range, to avoid a branch
+that depends on the keys, and was slower. In the same session the read-write `GetSubnets(network).Any()` took 9.3 to
+9.5 ms on IPv4 and 11.5 to 12.2 ms on IPv6, so the frozen form now takes 1.02 to 1.05 times the read-write time on
+IPv4 and 0.79 to 0.83 of it on IPv6. The levels add 0.27 MB to the frozen real IPv4 table and 0.24 MB to the IPv6
+table.
+
+**IPv6 lookups from `IPAddress` objects.** On the small IPv6 table the frozen form was no faster than the read-write
+one from `IPAddress` objects, although it was from `UInt128` keys: 13.2 ms against 17.4 ms in a first session. The JIT
+compiled `IPAddressBits.IPv6Bits`, which is marked `AggressiveInlining`, as a call, because it wrote the address into a
+`stackalloc` buffer, and the call returned its `UInt128` through memory. The address now writes its bytes over the
+result itself, and the conversion inlines. A million frozen lookups on the small IPv6 table, leaf-pushed:
+
+| Lookups | Time |
+| --- | --- |
+| From `IPAddress` objects, through a `stackalloc` buffer | 30.1 ms |
+| From `IPAddress` objects, into the result, as shipped | 15.9 ms |
+| The conversion alone, through a `stackalloc` buffer | 3.0 ms |
+| The conversion alone, into the result | 1.6 ms |
+| 16,384 addresses that stay in the cache, repeated, from `IPAddress` objects through the buffer | 29.5 ms |
+| The same addresses from `UInt128` keys | 11.9 ms |
+
+The call cost 14 ns inside a lookup, where the conversion alone shows only 1.4 ns, and the addresses that stay in the
+cache show that the cost is in the code, not in reading the address objects. Every lookup from an IPv6 `IPAddress` paid
+it, in both forms and in the adapter packages.
+
+**The IP layer.** `LayerBenchmarks` measured the layer at 1.06 times the bare trie. It compared two tries built apart,
+and in one session a bare trie took 31.1 ms when it was built on its own and 28.5 ms when it was the trie inside the
+lookup, against 31.5 ms through the lookup, with standard deviations of 6 to 12%. The disassembly shows what the layer
+adds to each lookup: two null checks, a load of the trie reference and a store of the key, all around the same call to
+the trie's search. The difference was where the tries lay in memory, so `LayerBenchmarks` now walks the trie inside
+the lookup.
+
 ### Measured baseline
 
-All numbers come from a 4-core cloud container (Intel Xeon, 2.8 GHz) on .NET 10.0.13 with BenchmarkDotNet 0.15.8, on
-2026-10-19 and 20. Lookups allocate nothing in either form. Timings in this container drift by about 10% between
-sessions, so compare ratios within a table rather than times across tables.
+The numbers in this section come from a 4-core cloud container (Intel Xeon, 2.8 GHz) on .NET 10.0.13 with
+BenchmarkDotNet 0.15.8, on 2026-10-19 and 20. They predate the changes under [Since the baseline](#since-the-baseline);
+the [latest full run](#latest-full-run) measures the current code on a faster machine. Lookups allocate nothing in either
+form. Timings in this container drift by about 10% between sessions, so compare ratios within a table rather than times
+across tables.
 
 The random-table and comparison benchmarks below stored version 2's `NetworkPrefix` objects, through an adapter
 package that has since been dropped. They now store `System.Net.IPNetwork` values, which are 8 bytes larger per entry
@@ -786,6 +983,8 @@ bits.
 | A 24-bit root for frozen IPv4 tables | Already possible with `RootBits = 24`: 0.37 of the read-write time in the prototype, at about twice the memory | Option exists |
 | Pruned backtracking, best match per shortcut slot, child positions cached per node | | Tried in the prototype, slower; see [Bart-Comparison.md](Bart-Comparison.md#remedies-tried) |
 | Shortcut blocks per first octet instead of a flat 65,536-slot table | Small tries hold almost nothing; batch commits stop allocating 1 MB | Done; see below |
+| Search the frozen keys through sampled levels instead of a binary search | Fewer cache misses in `GetSubnets` and `Overlaps` | Done: 0.71 to 0.92 of the time, for 0.27 MB on the real IPv4 table; see [Changes after the first run](#changes-after-the-first-run). Counting the keys in each range instead of stopping early was slower |
+| Convert IPv6 addresses without a `stackalloc` buffer | The conversion inlines | Done: frozen lookups from IPv6 `IPAddress` objects in 0.53 of the time on a small table; see [Changes after the first run](#changes-after-the-first-run) |
 
 [Optimization-Log.md](Optimization-Log.md#what-did-not-help) lists more ideas that did not help.
 

@@ -1,5 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
+	<Import Project="../Packaging.props" />
+
 	<PropertyGroup>
 		<TargetFramework>net10.0</TargetFramework>
 		<ImplicitUsings>enable</ImplicitUsings>
@@ -7,32 +9,13 @@
 		<GenerateDocumentationFile>true</GenerateDocumentationFile>
 		<RootNamespace>Bitvantage.InternetProtocol.NetworkPrefixLookup</RootNamespace>
 		<Title>Bitvantage.InternetProtocol.NetworkPrefixLookup.IPNetwork2</Title>
-		<PackageProjectUrl>https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup</PackageProjectUrl>
-		<PackageIcon>icon.png</PackageIcon>
-		<RepositoryType>git</RepositoryType>
-		<PackageTags>network;networking;ip network;cidr;IPNetwork2;prefix table;longest prefix match</PackageTags>
-		<VersionPrefix>3.0.0</VersionPrefix>
-		<FileVersion>3.0.0</FileVersion>
-		<AssemblyVersion>3.0.0</AssemblyVersion>
-		<PackageReadmeFile>README.md</PackageReadmeFile>
-		<PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
-		<Description>Longest-prefix-match lookups for System.Net.IPNetwork2 from the IPNetwork2 package</Description>
-		<Copyright>Copyright © Michael Crino 2024</Copyright>
-		<RepositoryUrl>https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup.git</RepositoryUrl>
+		<PackageTags>ipnetwork2;ip;ipv4;ipv6;cidr;subnet;longest-prefix-match;lpm;ip-lookup</PackageTags>
+		<Description>Longest-prefix-match lookups over IPNetwork2 networks from the IPNetwork2 package.</Description>
 	</PropertyGroup>
 
 	<!-- Trimming and native AOT: the analyzers check that the library needs no reflection or runtime code generation -->
 	<PropertyGroup>
 		<IsAotCompatible>true</IsAotCompatible>
-	</PropertyGroup>
-
-	<!-- Source Link, which the SDK includes, and a symbol package, so that a debugger can step into the published source -->
-	<PropertyGroup>
-		<PublishRepositoryUrl>true</PublishRepositoryUrl>
-		<EmbedUntrackedSources>true</EmbedUntrackedSources>
-		<IncludeSymbols>true</IncludeSymbols>
-		<SymbolPackageFormat>snupkg</SymbolPackageFormat>
-		<ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
 	</PropertyGroup>
 
 	<ItemGroup>
@@ -41,8 +24,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<None Include="../README.md" Pack="true" PackagePath="" />
-		<None Include="../icon.png" Pack="true" PackagePath="" />
+		<None Include="README.md" Pack="true" PackagePath="" />
 	</ItemGroup>
 
 </Project>

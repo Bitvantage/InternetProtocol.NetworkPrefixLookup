@@ -1,19 +1,8 @@
 ﻿/*
    Bitvantage.InternetProtocol.NetworkPrefixLookup
-   Copyright (C) 2024 Michael Crino
+   Copyright (C) Michael Crino
 
-   This program is free software: you can redistribute it and/or modify
-   it under the terms of the GNU Affero General Public License as published by
-   the Free Software Foundation, either version 3 of the License, or
-   (at your option) any later version.
-
-   This program is distributed in the hope that it will be useful,
-   but WITHOUT ANY WARRANTY; without even the implied warranty of
-   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-   GNU Affero General Public License for more details.
-
-   You should have received a copy of the GNU Affero General Public License
-   along with this program.  If not, see <http://www.gnu.org/licenses/>.
+   Licensed under the MIT License. See LICENSE.md in the repository root.
 */
 
 using System.Collections;
@@ -84,7 +73,7 @@ public sealed record FrozenBitTrieOptions
 ///         Lookups read only the tables and an array of entries in address order; there are no trie nodes. Each entry
 ///         also records its bits, its length and the nearest shorter stored prefix that contains it, which answer the
 ///         queries about prefixes: the matches follow the nearest shorter prefixes, and the prefixes inside a prefix, being
-///         in address order, are one run of entries that a binary search finds.
+///         in address order, are one run of entries that a search through sampled keys finds.
 ///     </para>
 ///     <para>A frozen trie never changes, so any number of threads may read it.</para>
 /// </remarks>
@@ -156,10 +145,12 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     // child table, or the index of a compressed node.
     private const uint TableFlag = 0x8000_0000;
     private const int Stride = 6; // bits per compressed node
+    private const int KeyFanout = 16; // keys of the level below per key of _keyLevels
 
     private readonly Entry[] _entries;
     private readonly TValue[]? _values;
     private readonly TKey[] _keys; // the bits of each entry, for GetSubnets and Overlaps
+    private readonly TKey[][] _keyLevels; // every 16th key of _keys, every 16th of those, and so on; see LowerBound
     private readonly byte[] _lengths;
     private readonly int[] _parents; // the nearest shorter stored prefix containing each entry, or -1
 
@@ -186,6 +177,7 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
         Options = options;
 
         var bits = _keys = contents.Bits;
+        _keyLevels = BuildKeyLevels(bits);
         _entries = contents.Entries;
         _lengths = contents.Lengths;
         _parents = contents.Parents;
@@ -279,9 +271,17 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
         ArrayBytes(_root.Length, sizeof(uint)) + ArrayBytes(_tables.Length, sizeof(uint)) + ArrayBytes(_nodes.Length, Unsafe.SizeOf<CompressedNode>())
         + ArrayBytes(_answers.Length, sizeof(int)) + ArrayBytes(_entries.Length, Unsafe.SizeOf<Entry>())
         + ArrayBytes(_values?.Length ?? 0, Unsafe.SizeOf<TValue>()) + ArrayBytes(_keys.Length, Unsafe.SizeOf<TKey>())
-        + ArrayBytes(_lengths.Length, sizeof(byte)) + ArrayBytes(_parents.Length, sizeof(int));
+        + ArrayBytes(_lengths.Length, sizeof(byte)) + ArrayBytes(_parents.Length, sizeof(int)) + KeyLevelBytes();
 
     private static long ArrayBytes(int length, int elementSize) => length == 0 ? 0 : 24 + (long)length * elementSize;
+
+    private long KeyLevelBytes()
+    {
+        var bytes = ArrayBytes(_keyLevels.Length, IntPtr.Size);
+        foreach (var level in _keyLevels)
+            bytes += ArrayBytes(level.Length, Unsafe.SizeOf<TKey>());
+        return bytes;
+    }
 
     // ---- lookups ---------------------------------------------------------------------------------------------------
 
@@ -510,21 +510,30 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     // The first entry at or after the prefix (bits, length) in address order, where bits are truncated to length; the
     // entries inside the prefix are the run that starts there. The prefixes that contain it and start at the same
     // address are shorter, so they come before.
+    //
+    // A binary search over a million keys makes about 20 reads far apart, most of them cache misses on a large table.
+    // Instead each level of _keyLevels narrows the search on the level below to the 15 keys after the last key below
+    // bits, which lie together: on the full IPv4 table, five levels and then the keys, each a short scan of adjacent
+    // keys. Counting the keys below bits instead of stopping at the first that is not was slower.
     private int LowerBound(in TKey bits, int length)
     {
-        var low = 0;
-        var high = _keys.Length;
-        while (low < high)
+        // The first key at or above bits on a level is at position; on the level below, the first such key comes after
+        // the key sampled at position - 1, which is below bits, and at or before the key sampled at position.
+        var position = 0;
+        var high = _keyLevels.Length > 0 ? _keyLevels[^1].Length : _keys.Length;
+        for (var level = _keyLevels.Length - 1; level >= -1; level--)
         {
-            var middle = (int)((uint)(low + high) >> 1);
-            var order = TKey.Compare(in _keys[middle], in bits);
-            if (order < 0 || (order == 0 && _lengths[middle] < length))
-                low = middle + 1;
-            else
-                high = middle;
+            var levelKeys = level >= 0 ? _keyLevels[level] : _keys;
+            var low = position == 0 ? 0 : (position - 1) * KeyFanout + 1;
+            if (level < _keyLevels.Length - 1)
+                high = (int)Math.Min((long)position * KeyFanout, levelKeys.Length);
+            for (position = low; position < high && TKey.Compare(in levelKeys[position], in bits) < 0; position++) { }
         }
 
-        return low;
+        // the entries at bits itself that are shorter than length contain the prefix, and come first
+        while (position < _keys.Length && _lengths[position] < length && TKey.Compare(in _keys[position], in bits) == 0)
+            position++;
+        return position;
     }
 
     // true when entry entryIndex lies inside the prefix (bits, length), whose mask is mask
@@ -546,6 +555,22 @@ public sealed class FrozenBitTrie<TKey, TPrefix, TValue> : IReadOnlyBitTrie<TKey
     }
 
     // ---- building --------------------------------------------------------------------------------------------------
+
+    // Every 16th key of keys, then every 16th key of that level, up to a level of at most 16 keys. The levels add a
+    // fifteenth to the keys' memory.
+    private static TKey[][] BuildKeyLevels(TKey[] keys)
+    {
+        var levels = new List<TKey[]>();
+        for (var below = keys; below.Length > KeyFanout; below = levels[^1])
+        {
+            var level = new TKey[(below.Length + KeyFanout - 1) / KeyFanout];
+            for (var levelIndex = 0; levelIndex < level.Length; levelIndex++)
+                level[levelIndex] = below[levelIndex * KeyFanout];
+            levels.Add(level);
+        }
+
+        return levels.ToArray();
+    }
 
     // The runs of entries in [low, high) longer than decided + bits, grouped by the slot their next `bits` bits select. The
     // entries come in address order, so the entries below one slot are contiguous: a shorter prefix that starts in a
