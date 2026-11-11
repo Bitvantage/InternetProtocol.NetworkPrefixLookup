@@ -1,5 +1,6 @@
 # Builds, tests and packs every push to main, every v* tag and every pull request to main, and publishes the packages
-# to nuget.org when a v* tag is pushed. Publishing uses Trusted Publishing, so no API key is stored in the repository.
+# to nuget.org when a v* tag is pushed. A manual run builds any tag or commit and can publish it, for example to retry
+# a publish that failed. Publishing uses Trusted Publishing, so no API key is stored in the repository.
 name: CI
 
 on:
@@ -8,6 +9,16 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or commit to build. Empty builds the selected branch.'
+        type: string
+        default: ''
+      publish:
+        description: 'Push the packages to nuget.org. Existing versions are skipped.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -19,6 +30,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.ref || github.ref }}
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -39,7 +51,7 @@ jobs:
       - name: Pack
         run: dotnet pack --no-build --configuration Release --output artifacts
 
-      # the symbol packages go too: pushing a .nupkg also pushes the .snupkg beside it
+      # the symbol packages go too, for the publish job to push
       - uses: actions/upload-artifact@v4
         with:
           name: nupkg
@@ -59,7 +71,10 @@ jobs:
         os: [ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
+      # the same tag or commit the build job packs
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
@@ -80,6 +95,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
@@ -89,7 +106,7 @@ jobs:
 
   publish:
     needs: [build, test, aot]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish)
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -111,5 +128,10 @@ jobs:
         with:
           user: Bitvantage
 
+      # The symbol packages are pushed on their own as well. A package whose version is already on nuget.org is
+      # skipped together with its .snupkg, so without the second push a symbol package that failed to upload, or
+      # one added later, would never reach nuget.org.
       - name: Push to nuget.org
-        run: dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: |
+          dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "artifacts/*.snupkg" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate

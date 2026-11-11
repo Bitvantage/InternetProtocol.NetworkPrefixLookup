@@ -95,11 +95,12 @@ interface differs from the original proposal. `Documentation/Adapter-Survey.md` 
   folder, and it targets .NET 7, which the original shipped on, as well as .NET 10.
 - `AotSmokeTest/` exercises each package once. It is in the solution and treats warnings as errors, so its build runs
   the AOT analyzers over the libraries' use, and CI publishes it with native AOT and runs it.
-- `.github/workflows/ci.yml` runs on pushes to `main`, on `v*` tags and on pull requests to `main`. It builds with
-  warnings as errors, tests both target frameworks on Linux x64 and ARM64 and on Windows, packs on Linux, and publishes
-  `AotSmokeTest` with native AOT for linux-x64 and linux-arm64. A `v*` tag also publishes the packages to nuget.org
-  through Trusted Publishing, so no API key is stored. macOS is left out because no macOS runner took the job on the
-  first run.
+- `.github/workflows/ci.yml` runs on pushes to `main`, on `v*` tags, on pull requests to `main` and by hand on any
+  tag or commit. It builds with warnings as errors, tests both target frameworks on Linux x64 and ARM64 and on
+  Windows, packs on Linux, and publishes `AotSmokeTest` with native AOT for linux-x64 and linux-arm64. A `v*` tag, or
+  a manual run with `publish` checked, also pushes the packages and their symbol packages to nuget.org through
+  Trusted Publishing, so no API key is stored. macOS is left out because no macOS runner took the job on the first
+  run.
 
 ## Build and test
 
@@ -165,9 +166,11 @@ The whole solution builds with no warnings. Do not add any.
   belong in `CHANGELOG.md`. It is also the core package's README on nuget.org, which renders no relative links or
   images, so its links use absolute `github.com` URLs on `main` and its images `raw.githubusercontent.com` ones.
 - Releases are published by CI. Set `Version` in `Packaging.props`, merge to `main`, and push the tag `v<Version>` on
-  that commit; the `publish` job pushes the packages to nuget.org. The tag must be on a commit pushed to GitHub, so that
-  Source Link can fetch the source each package records, and the packages' release notes link to the tag's release
-  page. Once 3.0.0 is on nuget.org, uncomment `PackageValidationBaselineVersion` in `Packaging.props`.
+  that commit; the `publish` job pushes the packages to nuget.org. To retry a publish, run the workflow by hand with
+  `ref` set to the tag and `publish` checked; versions already on nuget.org are skipped. The tag must be on a commit
+  pushed to GitHub, so that Source Link can fetch the source each package records, and the packages' release notes
+  link to the tag's release page. Once 3.0.0 is on nuget.org, uncomment `PackageValidationBaselineVersion` in
+  `Packaging.props`.
 - Comment tags in the code:
   - `PERF:` marks a known cost on a hot path.
   - `KNOWN ISSUE:` marks a confirmed bug that was intentionally left unchanged.
