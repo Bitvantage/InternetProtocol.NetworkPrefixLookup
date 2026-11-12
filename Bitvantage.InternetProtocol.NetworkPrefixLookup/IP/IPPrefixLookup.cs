@@ -36,9 +36,14 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     private readonly BitTrie<Bits128, TPrefix, TValue> _ipv6Trie;
     private readonly IPLookupReader<TPrefix, TAdapter, TValue, ReadWriteForm> _reader;
 
+    /// <summary>Creates an empty lookup that looks up every address as given.</summary>
+    public IPPrefixLookup() : this(options: null)
+    {
+    }
+
     /// <summary>Creates an empty lookup.</summary>
-    /// <param name="options">Lookup options; by default every address is looked up as given.</param>
-    public IPPrefixLookup(IPLookupOptions? options = null) : this(new BitTrie<Bits32, TPrefix, TValue>(), new BitTrie<Bits128, TPrefix, TValue>(), options)
+    /// <param name="options">Lookup options, or null for the defaults, which look up every address as given.</param>
+    public IPPrefixLookup(IPLookupOptions? options) : this(new BitTrie<Bits32, TPrefix, TValue>(), new BitTrie<Bits128, TPrefix, TValue>(), options)
     {
     }
 
@@ -61,6 +66,7 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     ///     A prefix appears more than once, or <see cref="IPLookupOptions.MapIPv4MappedAddresses" /> is on and a prefix lies
     ///     inside <c>::ffff:0:0/96</c>.
     /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="items" /> or a prefix in it is null.</exception>
     public IPPrefixLookup(IEnumerable<KeyValuePair<TPrefix, TValue>> items, IPLookupOptions? options = null) : this(options) =>
         Load<KeyValuePair<TPrefix, TValue>, Pairs>(items);
 
@@ -75,6 +81,7 @@ public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup
     ///     A prefix appears more than once, or <see cref="IPLookupOptions.MapIPv4MappedAddresses" /> is on and a prefix lies
     ///     inside <c>::ffff:0:0/96</c>.
     /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="items" /> or a prefix in it is null.</exception>
     public IPPrefixLookup(IEnumerable<PrefixEntry<TPrefix, TValue>> items, IPLookupOptions? options = null) : this(options) =>
         Load<PrefixEntry<TPrefix, TValue>, Entries>(items);
 

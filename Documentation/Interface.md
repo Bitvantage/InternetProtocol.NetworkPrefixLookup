@@ -310,7 +310,8 @@ public sealed record IPLookupOptions
 public class IPPrefixLookup<TPrefix, TAdapter, TValue> : IReadOnlyIPPrefixLookup<TPrefix, TValue>
     where TAdapter : struct, IIPPrefixAdapter<TPrefix>
 {
-    public IPPrefixLookup(IPLookupOptions? options = null);
+    public IPPrefixLookup();
+    public IPPrefixLookup(IPLookupOptions? options);                                                            // null for the defaults
     public IPPrefixLookup(IEnumerable<KeyValuePair<TPrefix, TValue>> items, IPLookupOptions? options = null);   // one pass
     public IPPrefixLookup(IEnumerable<PrefixEntry<TPrefix, TValue>> items, IPLookupOptions? options = null);    // another lookup, or a query's result
 
@@ -347,6 +348,7 @@ public readonly record struct IPLookupStatistics(BitTrieStatistics IPv4, BitTrie
 ```
 
 - **Null prefixes** are rejected with `ArgumentNullException`, without boxing struct prefixes.
+- **Constructors.** An empty lookup has a parameterless constructor next to the one that takes options, so the read-write lookups satisfy a `new()` constraint, `Activator.CreateInstance` and `Lazy<T>`; a constructor whose parameters are all optional satisfies none of them. A dependency injection container cannot create a read-write lookup from its type: it can supply any `IEnumerable<T>`, so the two constructors from a sequence tie, and under native AOT Microsoft's container refuses to build a sequence of structs at all. Register a lookup with a factory, `services.AddSingleton(_ => new IPNetworkLookup<int>())`, and forward `IReadOnlyIPPrefixLookup<IPNetwork, int>` to the same instance for code that only reads.
 - **`Add`** throws when the prefix is already present, as `Dictionary.Add` does, where `TryAdd` returns false. It stays
   for that, and because it lets a collection initializer fill a lookup: `new IPNetworkLookup<int> { { network, 64512 } }`,
   or `new IPNetworkLookup<NoValue> { network }` through the `Add(prefix)` of `NoValueLookupExtensions`.
@@ -475,6 +477,7 @@ differs from that proposal:
 | Frozen layout | Leaf-pushed unless the caller chose otherwise | Chosen from the data unless the caller chooses, because leaf-pushed tables can grow to gigabytes on scattered prefixes |
 | Freezing | `Freeze(ipv4 = null, ipv6 = null)` | `Freeze(options)` for both families and `Freeze(ipv4Options, ipv6Options)` for one each: the single method let `Freeze(compressed)` compress only IPv4. Writers wait only while the prefixes are copied |
 | IPv4-mapped addresses | Not covered | `IPLookupOptions.MapIPv4MappedAddresses`, off by default and on for MaxMind lookups, with prefixes inside `::ffff:0:0/96` rejected while it is on. The queries about networks follow it, so that `TryGetMatch(::ffff:10.1.2.3/128)` answers as the address `::ffff:10.1.2.3` does |
+| Empty lookups | One constructor with optional options | A parameterless constructor, as `BitTrie` and the .NET collections have, next to one that takes options, so that generic code with a `new()` constraint, `Activator.CreateInstance` and `Lazy<T>` can create a lookup. Creation by a dependency injection container was left out. Microsoft's container could create a lookup under native AOT only if no public constructor took an `IEnumerable<T>`: narrowed to `IReadOnlyCollection<T>`, the constructors from a sequence would no longer take a LINQ query or a `GetSubnets` result, and factory methods in their place would remove the constructors from a sequence altogether. `Dictionary<TKey, TValue>` and `List<int>` fail the same way there, and a registration with a factory takes one line |
 | Entry types | `PrefixEntry` out, `KeyValuePair` in | Both in: the constructors from a sequence also take `PrefixEntry`, so `new IPNetworkLookup<int>(other)` copies a lookup and `new IPNetworkLookup<int>(other.GetSubnets(block))` part of one, while dictionaries still go in as they are. Results keep `PrefixEntry` for its `Prefix` name |
 | Namespace | Not stated; version 2 and the first builds used `Bitvantage.InternetProtocol` | `Bitvantage.InternetProtocol.NetworkPrefixLookup`, the core package's name, for every package. The shared namespace let one `using` cover the `NetworkPrefix` type and the lookups; with that package gone, the package's own name keeps generic names such as `BitTrie`, `PrefixEntry` and `WriteBatch` apart from Bitvantage's other `Bitvantage.InternetProtocol` libraries. It became possible once no class was named `NetworkPrefixLookup` |
 | `NetworkPrefix` adapter | A package with `NetworkPrefixLookup<TValue>` | Built, then dropped: `NetworkPrefix` is being retired, since `System.Net.IPNetwork` covers what it did and a separate extension class fills the gaps |

@@ -35,16 +35,25 @@ public readonly struct IPNetwork2Adapter : IIPPrefixAdapter<IPNetwork2>
 /// <typeparam name="TValue">The value type; <see cref="NoValue" /> for a set of prefixes without values.</typeparam>
 public class IPNetwork2Lookup<TValue> : IPPrefixLookup<IPNetwork2, IPNetwork2Adapter, TValue>
 {
+    /// <summary>Creates an empty lookup that looks up every address as given.</summary>
+    public IPNetwork2Lookup()
+    {
+    }
+
     /// <summary>Creates an empty lookup.</summary>
-    /// <param name="options">Lookup options; by default every address is looked up as given.</param>
-    public IPNetwork2Lookup(IPLookupOptions? options = null) : base(options)
+    /// <param name="options">Lookup options, or null for the defaults, which look up every address as given.</param>
+    public IPNetwork2Lookup(IPLookupOptions? options) : base(options)
     {
     }
 
     /// <summary>Creates a lookup holding the given prefixes, built in one pass.</summary>
     /// <param name="items">The prefixes and their values.</param>
     /// <param name="options">Lookup options; by default every address is looked up as given.</param>
-    /// <exception cref="ArgumentException">A prefix appears more than once.</exception>
+    /// <exception cref="ArgumentException">
+    ///     A prefix appears more than once, or <see cref="IPLookupOptions.MapIPv4MappedAddresses" /> is on and a prefix lies
+    ///     inside <c>::ffff:0:0/96</c>.
+    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="items" /> or a prefix in it is null.</exception>
     public IPNetwork2Lookup(IEnumerable<KeyValuePair<IPNetwork2, TValue>> items, IPLookupOptions? options = null) : base(items, options)
     {
     }
@@ -52,7 +61,11 @@ public class IPNetwork2Lookup<TValue> : IPPrefixLookup<IPNetwork2, IPNetwork2Ada
     /// <summary>Creates a lookup holding the given prefixes, built in one pass: another lookup's contents, or the result of a query.</summary>
     /// <param name="items">The prefixes and their values.</param>
     /// <param name="options">Lookup options; by default every address is looked up as given.</param>
-    /// <exception cref="ArgumentException">A prefixe appears more than once.</exception>
+    /// <exception cref="ArgumentException">
+    ///     A prefix appears more than once, or <see cref="IPLookupOptions.MapIPv4MappedAddresses" /> is on and a prefix lies
+    ///     inside <c>::ffff:0:0/96</c>.
+    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="items" /> or a prefix in it is null.</exception>
     public IPNetwork2Lookup(IEnumerable<PrefixEntry<IPNetwork2, TValue>> items, IPLookupOptions? options = null) : base(items, options)
     {
     }

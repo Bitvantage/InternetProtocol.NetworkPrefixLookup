@@ -4,7 +4,7 @@
 	<PropertyGroup>
 		<Authors>Michael Crino</Authors>
 		<Company>Bitvantage</Company>
-		<Version>3.0.0</Version>
+		<Version>3.1.0</Version>
 		<Copyright>Copyright © 2024-2026 Michael Crino</Copyright>
 		<PackageProjectUrl>https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup</PackageProjectUrl>
 		<RepositoryUrl>https://github.com/Bitvantage/InternetProtocol.NetworkPrefixLookup.git</RepositoryUrl>
@@ -29,10 +29,9 @@
 	<!-- Package validation, so that a pack fails if the public API changes in a way that breaks consumers -->
 	<PropertyGroup>
 		<EnablePackageValidation>true</EnablePackageValidation>
-		<!-- Compares the public API with a published version. There is none to compare with yet: the core's latest on
-		     nuget.org, 2.0.0, is the previous major version, whose API and target framework 3.0.0 replaces on purpose, and
-		     the adapter packages are not published. Uncomment the line once 3.0.0 is on nuget.org. -->
-		<!-- <PackageValidationBaselineVersion>3.0.0</PackageValidationBaselineVersion> -->
+		<!-- Compares the public API with the first version of the current major version, 3.0.0, which all three packages
+		     published, so that a minor or patch release cannot break consumers of 3.0.0. -->
+		<PackageValidationBaselineVersion>3.0.0</PackageValidationBaselineVersion>
 	</PropertyGroup>
 
 	<ItemGroup>

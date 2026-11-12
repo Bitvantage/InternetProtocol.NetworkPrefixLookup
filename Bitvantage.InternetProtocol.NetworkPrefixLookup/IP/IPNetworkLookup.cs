@@ -34,16 +34,25 @@ public readonly struct IPNetworkAdapter : IIPPrefixAdapter<IPNetwork>
 /// <typeparam name="TValue">The value type; <see cref="NoValue" /> for a set of networks without values.</typeparam>
 public class IPNetworkLookup<TValue> : IPPrefixLookup<IPNetwork, IPNetworkAdapter, TValue>
 {
+    /// <summary>Creates an empty lookup that looks up every address as given.</summary>
+    public IPNetworkLookup()
+    {
+    }
+
     /// <summary>Creates an empty lookup.</summary>
-    /// <param name="options">Lookup options; by default every address is looked up as given.</param>
-    public IPNetworkLookup(IPLookupOptions? options = null) : base(options)
+    /// <param name="options">Lookup options, or null for the defaults, which look up every address as given.</param>
+    public IPNetworkLookup(IPLookupOptions? options) : base(options)
     {
     }
 
     /// <summary>Creates a lookup holding the given networks, built in one pass.</summary>
     /// <param name="items">The networks and their values.</param>
     /// <param name="options">Lookup options; by default every address is looked up as given.</param>
-    /// <exception cref="ArgumentException">A network appears more than once.</exception>
+    /// <exception cref="ArgumentException">
+    ///     A network appears more than once, or <see cref="IPLookupOptions.MapIPv4MappedAddresses" /> is on and a network
+    ///     lies inside <c>::ffff:0:0/96</c>.
+    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="items" /> is null.</exception>
     public IPNetworkLookup(IEnumerable<KeyValuePair<IPNetwork, TValue>> items, IPLookupOptions? options = null) : base(items, options)
     {
     }
@@ -51,7 +60,11 @@ public class IPNetworkLookup<TValue> : IPPrefixLookup<IPNetwork, IPNetworkAdapte
     /// <summary>Creates a lookup holding the given networks, built in one pass: another lookup's contents, or the result of a query.</summary>
     /// <param name="items">The networks and their values.</param>
     /// <param name="options">Lookup options; by default every address is looked up as given.</param>
-    /// <exception cref="ArgumentException">A network appears more than once.</exception>
+    /// <exception cref="ArgumentException">
+    ///     A network appears more than once, or <see cref="IPLookupOptions.MapIPv4MappedAddresses" /> is on and a network
+    ///     lies inside <c>::ffff:0:0/96</c>.
+    /// </exception>
+    /// <exception cref="ArgumentNullException"><paramref name="items" /> is null.</exception>
     public IPNetworkLookup(IEnumerable<PrefixEntry<IPNetwork, TValue>> items, IPLookupOptions? options = null) : base(items, options)
     {
     }

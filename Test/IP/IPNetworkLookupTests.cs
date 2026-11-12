@@ -284,6 +284,19 @@ public class IPNetworkLookupTests
         Assert.Throws<ArgumentException>(() => _ = new IPNetworkLookup<NoValue> { N("192.0.2.0/24"), N("192.0.2.0/24") }, "a duplicate throws, as Add does");
     }
 
+    [Test(Description = "A parameterless constructor lets generic code, Activator and Lazy create a lookup, which a constructor whose parameters are all optional does not.")]
+    public void Generic_code_can_create_a_lookup()
+    {
+        Assert.That(Create<IPNetworkLookup<string>>().Options, Is.EqualTo(new IPLookupOptions()));
+        Assert.That(Create<IPPrefixLookup<IPNetwork, IPNetworkAdapter, string>>().Options, Is.EqualTo(new IPLookupOptions()));
+        Assert.That(Activator.CreateInstance<IPNetworkLookup<string>>().Count, Is.Zero);
+        Assert.That(new Lazy<IPNetworkLookup<string>>().Value.Count, Is.Zero);
+        Assert.That(new IPNetworkLookup<string>(options: null).Options, Is.EqualTo(new IPLookupOptions()), "null options are the defaults");
+        Assert.That(new IPNetworkLookup<string>(null).Options, Is.EqualTo(new IPLookupOptions()), "an unnamed null binds to the options, not to a sequence");
+    }
+
+    private static T Create<T>() where T : new() => new();
+
     [Test]
     public void Counts_cover_each_family()
     {

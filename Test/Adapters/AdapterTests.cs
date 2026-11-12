@@ -41,6 +41,18 @@ public class AdapterTests
         Assert.That(lookup.TryGetMatchValue(IPAddress.Parse("10.200.0.1"), out var after) && after == 8);
     }
 
+    [Test(Description = "The adapter lookups have parameterless constructors too, and MaxMind's keeps its default of mapping IPv4-mapped addresses.")]
+    public void Generic_code_can_create_an_adapter_lookup()
+    {
+        Assert.That(Create<IPNetwork2Lookup<int>>().Options.MapIPv4MappedAddresses, Is.False);
+        Assert.That(Create<MaxMindNetworkLookup<int>>().Options.MapIPv4MappedAddresses, Is.True);
+        Assert.That(new MaxMindNetworkLookup<int>(options: null).Options.MapIPv4MappedAddresses, Is.True, "null options are MaxMind's defaults");
+        Assert.That(new MaxMindNetworkLookup<int>(null).Options.MapIPv4MappedAddresses, Is.True, "an unnamed null binds to the options, not to a sequence");
+        Assert.That(new MaxMindNetworkLookup<int>(new IPLookupOptions()).Options.MapIPv4MappedAddresses, Is.False, "given options are kept");
+    }
+
+    private static T Create<T>() where T : new() => new();
+
     private static string DataPath(string file) => Path.Combine(TestContext.CurrentContext.TestDirectory, "Data", "MaxMind", file);
 
     private static string Json(object? record) => JsonSerializer.Serialize(record);

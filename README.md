@@ -194,6 +194,17 @@ var site = new IPNetworkLookup<int>(routes.GetSubnets(IPNetwork.Parse("10.1.0.0/
 `Version` changes with every published change, so a cache of lookup results can be checked with one comparison. Read it
 before the lookups it is to vouch for.
 
+## Sharing a table through dependency injection
+
+Register the table as a singleton with a factory, and register the read-only interface as the same instance, for code that only reads:
+
+```csharp
+builder.Services.AddSingleton(_ => new IPNetworkLookup<int>());
+builder.Services.AddSingleton<IReadOnlyIPPrefixLookup<IPNetwork, int>>(serviceProvider => serviceProvider.GetRequiredService<IPNetworkLookup<int>>());
+```
+
+The writer, such as a hosted service that follows a BGP feed, takes `IPNetworkLookup<int>`, and everything else takes `IReadOnlyIPPrefixLookup<IPNetwork, int>`. A table registered without a factory, as `AddSingleton<IPNetworkLookup<int>>()`, cannot be resolved: the container cannot choose between the constructors that take a sequence, and under native AOT it cannot build a sequence of structs at all.
+
 ## Frozen tables
 
 `Freeze` builds a read-only copy with faster lookups:

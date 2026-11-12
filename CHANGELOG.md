@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.1.0
+
+### Added
+
+- Parameterless constructors for `IPNetworkLookup<TValue>`, `IPNetwork2Lookup<TValue>`, `MaxMindNetworkLookup<TValue>` and `IPPrefixLookup<TPrefix, TAdapter, TValue>`, so that generic code with a `new()` constraint, `Activator.CreateInstance` and `Lazy<T>` can create an empty lookup. The constructor that takes only options no longer has a default value.
+- A README section on sharing a table through dependency injection.
+
+### Fixed
+
+- The constructors that build a table from a sequence document every exception they throw.
+
 ## 3.0.0
 
 Version 3 is a new design with a new interface. The core is a multibit trie that works on bits only, the IP layer sits

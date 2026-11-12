@@ -145,7 +145,7 @@ ROUTEVIEWS_DIR=/tmp/routeviews dotnet run -c Release --project PerformanceTest
 ROUTEVIEWS_DIR=/tmp/routeviews dotnet test Prototypes/GenericTrie.Tests -c Release   # about 3 minutes
 ```
 
-**Test baseline:** all 64 tests pass on each target framework. The two tests that assert exact `ToTextTree` and `ToDotTree` output build their
+**Test baseline:** all 66 tests pass on each target framework. The two tests that assert exact `ToTextTree` and `ToDotTree` output build their
 expected text with `Environment.NewLine`, so they pass with either line ending. Keep `.gitattributes` at `text=auto`.
 
 The whole solution builds with no warnings. Do not add any.
@@ -169,8 +169,7 @@ The whole solution builds with no warnings. Do not add any.
   that commit; the `publish` job pushes the packages to nuget.org. To retry a publish, run the workflow by hand with
   `ref` set to the tag and `publish` checked; versions already on nuget.org are skipped. The tag must be on a commit
   pushed to GitHub, so that Source Link can fetch the source each package records, and the packages' release notes
-  link to the tag's release page. Once 3.0.0 is on nuget.org, uncomment `PackageValidationBaselineVersion` in
-  `Packaging.props`.
+  link to the tag's release page. Package validation compares each pack's public API with 3.0.0, the `PackageValidationBaselineVersion` in `Packaging.props`, so a minor or patch release that breaks it fails to pack; a new major version, which breaks the API on purpose, must change or comment out the baseline until its first release is published.
 - Comment tags in the code:
   - `PERF:` marks a known cost on a hot path.
   - `KNOWN ISSUE:` marks a confirmed bug that was intentionally left unchanged.
